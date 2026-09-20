@@ -1,0 +1,4 @@
+# Grupo al que se ceden los atributos sysfs del driver, para poder cambiarlos
+# sin privilegios de root. Anade tu usuario con:
+#   sudo usermod -aG linuwu_sense $USER
+g linuwu_sense -

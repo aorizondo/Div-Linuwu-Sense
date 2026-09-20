@@ -1,4 +1,69 @@
 # Unofficial Linux Kernel Module for Acer Gaming RGB Keyboard Backlight and Turbo Mode (Acer Predator , Nitro)
+
+---
+
+## Paquetes Debian (este fork)
+
+Este fork anade empaquetado Debian, integracion con `power-profiles-daemon` y
+compatibilidad con kernels anteriores a 6.13.
+
+### Instalacion
+
+Descarga los `.deb` del [ultimo release](https://github.com/aorizondo/Div-Linuwu-Sense/releases) e instala:
+
+```bash
+sudo apt install ./linuwu-sense-dkms_*.deb ./acer-powersave_*.deb
+```
+
+`linuwu-sense-dkms` compila el modulo con DKMS, de modo que se reconstruye solo
+en cada actualizacion del kernel. `acer-powersave` es opcional e independiente.
+
+Tras instalar, reinicia (o `sudo modprobe -r acer_wmi && sudo modprobe linuwu_sense`),
+y anade tu usuario al grupo para manejar el driver sin `sudo`:
+
+```bash
+sudo usermod -aG linuwu_sense $USER
+```
+
+Con Secure Boot activo hay que enrolar la clave de DKMS una vez; los detalles
+estan en `/usr/share/doc/linuwu-sense-dkms/README.Debian`.
+
+### Que aporta este fork sobre el upstream
+
+| Cambio | Motivo |
+|---|---|
+| Compatibilidad con la API `platform_profile` < 6.13 | El upstream usa `devm_platform_profile_register()` y `platform_profile_notify(dev)`, que no existen en el kernel 6.12 LTS de Debian 13, asi que no compilaba |
+| Quirk del Predator PH315-53 completado | Le faltaban `predator_v4` y `four_zone_kb`: sin ellos no se creaban `predator_sense/` ni `four_zoned_kb/` y hacia falta `enable_all=1` |
+| `Makefile` respeta `KERNELRELEASE` | DKMS compila para kernels distintos del que esta corriendo |
+| Empaquetado DKMS + CI | `.deb` construidos y publicados automaticamente, con matriz de compilacion sobre trixie, forky y sid |
+
+### acer-powersave
+
+Aplica los ajustes de energia que corresponden al perfil activo de
+`power-profiles-daemon`, **sin fichero de estado**: el perfil de PPD es la
+unica fuente de verdad. En KDE, PowerDevil ya traduce conectado/bateria a
+perfil, asi que esto sigue al cable y respeta el cambio manual.
+
+```bash
+acer-powersave status         # estado actual
+acer-powersave medir 60       # consumo mediano en reposo
+sudo acer-powersave gpu off   # apagar la dGPU NVIDIA en caliente
+sudo acer-powersave gpu on    # y volver a encenderla, sin reiniciar
+sudo acer-powersave fan       # curva de ventiladores con histeresis
+```
+
+La tasa de refresco la cambia un servicio de sesion aparte, porque
+`kscreen-doctor` necesita la sesion Wayland del usuario:
+
+```bash
+systemctl --user enable --now acer-powersave-session.service
+```
+
+Los perfiles se configuran en `/etc/acer-powersave/profiles.conf`.
+
+No toca el brillo de la pantalla ni la retroiluminacion del teclado.
+
+---
 The code base is still in its early stages, as I’ve just started working on developing this kernel module. It's a bit messy at the moment, but I’m hopeful that, with your help, we can collaborate to improve its structure and make it more organized over time.
 
 Inspired by [acer-predator-turbo](https://github.com/JafarAkhondali/acer-predator-turbo-and-rgb-keyboard-linux-module), which has a similar goal, this project was born out of my own challenges. I faced issues detecting the Turbo key and ended up using [acer_wmi](https://github.com/torvalds/linux/blob/master/drivers/platform/x86/acer-wmi.c), but it lacked key features like RGB , custom fan support, battery limiter, and more. As a result, I decided to implement these missing features in my own project.

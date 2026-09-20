@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main, debian-packaging]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # El .deb de DKMS no contiene binarios: el modulo lo compila el usuario en su
+  # maquina. Lo que hay que verificar aqui es que compila contra varias APIs de
+  # kernel, que es justo el riesgo de este fork (la capa de compatibilidad de
+  # platform_profile entre 6.12 y 6.13+).
+  compilar-modulo:
+    name: Compilar el modulo (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [debian:trixie-slim, debian:forky-slim, debian:sid-slim]
+    container:
+      image: ${{ matrix.image }}
+    steps:
+      - name: Instalar herramientas
+        run: |
+          apt-get update
+          # Siempre el metapaquete: linux-headers-$(uname -r) no existe como
+          # paquete para el kernel de los runners de GitHub.
+          apt-get install -y --no-install-recommends \
+            build-essential linux-headers-amd64 git ca-certificates
+
+      - uses: actions/checkout@v7
+
+      - name: Compilar contra cada arbol de headers presente
+        run: |
+          set -eux
+          encontrado=0
+          for kdir in /usr/lib/modules/*/build /lib/modules/*/build; do
+            [ -d "$kdir" ] || continue
+            kver="$(basename "$(dirname "$kdir")")"
+            echo "::group::$kver"
+            make KVER="$kver" KDIR="$kdir"
+            make clean KVER="$kver" KDIR="$kdir"
+            echo "::endgroup::"
+            encontrado=1
+          done
+          [ "$encontrado" = 1 ] || { echo "no se encontraron headers"; exit 1; }
+
+  construir-deb:
+    name: Construir los .deb
+    runs-on: ubuntu-latest
+    container:
+      image: debian:trixie-slim
+    steps:
+      - name: Instalar herramientas de empaquetado
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential debhelper dh-dkms dh-python devscripts lintian \
+            fakeroot git ca-certificates
+
+      - uses: actions/checkout@v7
+
+      - name: Construir
+        run: dpkg-buildpackage -us -uc -b --no-sign
+        env:
+          DEB_BUILD_OPTIONS: noautodbgsym
+
+      - name: Recoger artefactos
+        run: |
+          mkdir -p debs
+          mv ../*.deb ../*.buildinfo ../*.changes debs/ 2>/dev/null || true
+          ls -la debs/
+
+      # Informativo: no bloquea, para ver la evolucion sin frenar los PR.
+      - name: Lintian (informativo)
+        continue-on-error: true
+        run: lintian --pedantic --info --display-info debs/*.changes
+
+      # Bloqueante: solo errores de momento. Subir a error,warning cuando este
+      # limpio del todo.
+      - name: Lintian (bloqueante)
+        run: lintian --fail-on error debs/*.changes
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: deb-trixie
+          path: debs/

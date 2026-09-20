@@ -1,0 +1,432 @@
+#!/usr/bin/python3
+# -*- coding: utf-8 -*-
+"""
+acer-powersave - ajustes de energia para portatiles Acer Predator/Nitro.
+
+Como servicio ("acer-powersave daemon") aplica los ajustes privilegiados que
+corresponden al perfil activo de power-profiles-daemon. Como orden suelta
+sirve para consultar el estado, medir consumo y encender o apagar la dGPU.
+
+No guarda estado propio en ningun fichero: la propiedad ActiveProfile de PPD
+es la unica fuente de verdad. En KDE, PowerDevil ya traduce AC/bateria a
+perfil, asi que escuchar el perfil cubre tambien el enchufado y desenchufado
+y ademas respeta la eleccion manual del usuario.
+
+Lo que NO hace este servicio:
+  - brillo de pantalla ni retroiluminacion del teclado (los lleva el usuario)
+  - tasa de refresco: necesita la sesion Wayland, la aplica
+    acer-powersave-session como servicio de usuario
+"""
+
+import configparser
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import gi
+from gi.repository import Gio, GLib
+
+PPD_NAME = "org.freedesktop.UPower.PowerProfiles"
+PPD_PATH = "/org/freedesktop/UPower/PowerProfiles"
+CONFIG = "/etc/acer-powersave/profiles.conf"
+
+CPU = Path("/sys/devices/system/cpu")
+PSTATE = CPU / "intel_pstate"
+NVIDIA_ROOT_PORT = "0000:00:01.0"
+NVIDIA_FUNCS = ("0000:01:00.1", "0000:01:00.0")  # audio HDMI primero
+FAN_SYS = Path("/sys/module/linuwu_sense/drivers/platform:acer-wmi/acer-wmi"
+               "/predator_sense/fan_speed")
+
+
+def log(msg):
+    print(msg, flush=True)
+
+
+def write_sysfs(path, value):
+    """Escribe en sysfs solo si existe y es escribible. Nunca lanza."""
+    try:
+        p = Path(path)
+        if not p.exists() or not os.access(p, os.W_OK):
+            return False
+        p.write_text(str(value))
+        return True
+    except OSError as e:
+        log(f"  aviso: no se pudo escribir {path}: {e}")
+        return False
+
+
+def write_all(pattern, value):
+    n = 0
+    for p in CPU.glob(pattern):
+        if write_sysfs(p, value):
+            n += 1
+    return n
+
+
+def read_first(path, default=""):
+    try:
+        return Path(path).read_text().strip()
+    except OSError:
+        return default
+
+
+# --------------------------------------------------------------------------
+#  dGPU: encendido y apagado en caliente, sin reiniciar
+# --------------------------------------------------------------------------
+
+def gpu_present():
+    return Path(f"/sys/bus/pci/devices/{NVIDIA_FUNCS[1]}").exists()
+
+
+def gpu_in_use():
+    """Devuelve el motivo por el que no se puede apagar, o None si esta libre."""
+    for mod in ("nvidia_drm", "nvidia_modeset", "nvidia_uvm", "nvidia"):
+        refcnt = read_first(f"/sys/module/{mod}/refcnt")
+        if refcnt and refcnt != "0":
+            return f"el modulo {mod} tiene refcount {refcnt}"
+    if Path("/dev/nvidia0").exists():
+        r = subprocess.run(["fuser", "/dev/nvidia0"],
+                           capture_output=True, text=True)
+        if r.stdout.strip():
+            return f"hay procesos usando /dev/nvidia0: {r.stdout.strip()}"
+    return None
+
+
+def gpu_off():
+    """Descarga los modulos, quita la GPU del bus y deja que el puente caiga
+    a D3cold. Es lo mismo que hace envycontrol via udev, pero en caliente."""
+    if not gpu_present():
+        log("  dGPU: ya estaba fuera del bus")
+        write_sysfs(f"/sys/bus/pci/devices/{NVIDIA_ROOT_PORT}/power/control", "auto")
+        return True
+
+    motivo = gpu_in_use()
+    if motivo:
+        log(f"  dGPU: no se apaga, {motivo}")
+        return False
+
+    # El orden importa: al reves deja referencias colgando y falla.
+    for mod in ("nvidia_drm", "nvidia_modeset", "nvidia_uvm", "nvidia"):
+        subprocess.run(["modprobe", "-r", mod],
+                       capture_output=True, check=False)
+
+    # Hay que retirar TODAS las funciones; si queda un hijo vivo el puente
+    # nunca llega a D3cold.
+    for func in NVIDIA_FUNCS:
+        write_sysfs(f"/sys/bus/pci/devices/{func}/remove", "1")
+
+    write_sysfs(f"/sys/bus/pci/devices/{NVIDIA_ROOT_PORT}/power/control", "auto")
+    time.sleep(2)
+    estado = read_first(f"/sys/bus/pci/devices/{NVIDIA_ROOT_PORT}/power_state")
+    log(f"  dGPU: apagada (puente en {estado})")
+    return True
+
+
+def gpu_on():
+    """Reescanea el bridge y carga el driver. En Debian el modulo se llama
+    nvidia-current, no nvidia."""
+    if gpu_present():
+        log("  dGPU: ya presente")
+        return True
+
+    write_sysfs(f"/sys/bus/pci/devices/{NVIDIA_ROOT_PORT}/power/control", "on")
+    # Reescanear el bridge, no el bus entero: menos efectos colaterales.
+    write_sysfs(f"/sys/bus/pci/devices/{NVIDIA_ROOT_PORT}/rescan", "1")
+    # Sin esta espera la GPU no ha terminado de aparecer tras salir de D3cold.
+    time.sleep(3)
+
+    if not gpu_present():
+        log("  dGPU: el rescan no la encontro")
+        return False
+
+    for name in ("nvidia-current", "nvidia"):
+        r = subprocess.run(["modprobe", name], capture_output=True, text=True)
+        if r.returncode == 0:
+            log(f"  dGPU: encendida, modulo {name} cargado")
+            break
+    else:
+        log("  dGPU: presente en el bus pero no se pudo cargar el driver")
+
+    write_sysfs(f"/sys/bus/pci/devices/{NVIDIA_ROOT_PORT}/power/control", "auto")
+    return True
+
+
+# --------------------------------------------------------------------------
+#  Aplicacion de un perfil
+# --------------------------------------------------------------------------
+
+def leer_config():
+    cp = configparser.ConfigParser()
+    cp.read(CONFIG)
+    return cp
+
+
+def aplicar(perfil, cfg):
+    if not cfg.has_section(perfil):
+        log(f"perfil '{perfil}' sin seccion en {CONFIG}, se ignora")
+        return
+
+    s = cfg[perfil]
+    log(f"perfil -> {perfil}")
+
+    # --- CPU -------------------------------------------------------------
+    # Con intel_pstate en modo activo el governor debe quedarse en powersave
+    # y quien manda es el EPP. En modo passive manda el governor.
+    gov = s.get("governor", "").strip()
+    if gov:
+        write_all("cpu*/cpufreq/scaling_governor", gov)
+    epp = s.get("epp", "").strip()
+    if epp:
+        write_all("cpu*/cpufreq/energy_performance_preference", epp)
+
+    turbo = s.get("turbo", "").strip()
+    if turbo in ("on", "off"):
+        write_sysfs(PSTATE / "no_turbo", "0" if turbo == "on" else "1")
+
+    # --- dGPU ------------------------------------------------------------
+    gpu = s.get("dgpu", "").strip()
+    if gpu == "off":
+        gpu_off()
+    elif gpu == "on":
+        gpu_on()
+
+    # --- Ethernet --------------------------------------------------------
+    # Sin efecto medible en consumo, pero descargarla evita que el PHY quede
+    # alimentado sin enlace. Solo si no hay cable.
+    eth = s.get("ethernet", "").strip()
+    if eth == "off" and read_first("/sys/class/net/eth0/carrier", "0") == "0":
+        subprocess.run(["modprobe", "-r", "r8169"],
+                       capture_output=True, check=False)
+    elif eth == "on":
+        subprocess.run(["modprobe", "r8169"], capture_output=True, check=False)
+
+    # --- Ventiladores ----------------------------------------------------
+    fan = s.get("fan", "").strip()
+    if fan and FAN_SYS.exists():
+        if fan == "auto":
+            write_sysfs(FAN_SYS, "0,0")
+        elif fan.isdigit():
+            write_sysfs(FAN_SYS, f"{fan},{fan}")
+
+    # --- Periferia -------------------------------------------------------
+    if s.getboolean("runtime_pm", fallback=True):
+        for p in Path("/sys/bus/pci/devices").glob("*/power/control"):
+            write_sysfs(p, "auto")
+        for d in Path("/sys/bus/usb/devices").glob("*/"):
+            # El raton se excluye a proposito: autosuspenderlo da tirones.
+            if d.name in excluir_usb:
+                continue
+            write_sysfs(d / "power/control", "auto")
+
+    if s.get("audio_powersave", "").strip():
+        write_sysfs("/sys/module/snd_hda_intel/parameters/power_save",
+                    s.get("audio_powersave"))
+
+
+# --------------------------------------------------------------------------
+#  Bucle principal
+# --------------------------------------------------------------------------
+
+excluir_usb = set()
+
+
+def cargar_excluir(cfg):
+    global excluir_usb
+    excluir_usb = {x.strip() for x in
+                   cfg.get("general", "excluir_usb", fallback="").split(",")
+                   if x.strip()}
+
+
+def potencia_mw():
+    """Consumo instantaneo. No existe power_now en este equipo, se calcula."""
+    i = read_first("/sys/class/power_supply/BAT1/current_now")
+    v = read_first("/sys/class/power_supply/BAT1/voltage_now")
+    if not i or not v:
+        return None
+    return (int(i) // 1000) * (int(v) // 1000) // 1000
+
+
+def cmd_daemon(_args):
+    cfg = leer_config()
+    cargar_excluir(cfg)
+    try:
+        proxy = Gio.DBusProxy.new_for_bus_sync(
+            Gio.BusType.SYSTEM,
+            # No arrancar PPD si esta parado: si no esta, no hay nada que seguir.
+            Gio.DBusProxyFlags.DO_NOT_AUTO_START,
+            None, PPD_NAME, PPD_PATH, PPD_NAME, None)
+    except GLib.Error as e:
+        log(f"no se pudo hablar con power-profiles-daemon: {e}")
+        return 1
+
+    def on_props(_proxy, changed, _invalidated):
+        if "ActiveProfile" in changed.keys():
+            c = leer_config()
+            cargar_excluir(c)
+            aplicar(changed["ActiveProfile"], c)
+
+    proxy.connect("g-properties-changed", on_props)
+
+    # Estado inicial: nunca confiar solo en la senal, puede no llegar nunca.
+    actual = proxy.get_cached_property("ActiveProfile")
+    if actual is None:
+        log("PPD no reporta ActiveProfile; saliendo")
+        return 1
+    aplicar(actual.get_string(), cfg)
+
+    GLib.MainLoop().run()
+    return 0
+
+
+def perfil_activo():
+    try:
+        r = subprocess.run(["powerprofilesctl", "get"],
+                           capture_output=True, text=True, timeout=5)
+        return r.stdout.strip() or "?"
+    except (OSError, subprocess.SubprocessError):
+        return "?"
+
+
+def cmd_status(_args):
+    p = potencia_mw()
+    bat = read_first("/sys/class/power_supply/BAT1/capacity")
+    est = read_first("/sys/class/power_supply/BAT1/status")
+    print(f"{'consumo':<16} {p if p is not None else '?'} mW  ({est}, {bat}%)")
+    print(f"{'perfil PPD':<16} {perfil_activo()}")
+    print(f"{'governor':<16} {read_first(CPU / 'cpu0/cpufreq/scaling_governor')}")
+    print(f"{'epp':<16} {read_first(CPU / 'cpu0/cpufreq/energy_performance_preference')}")
+    print(f"{'frecuencia':<16} {read_first(CPU / 'cpu0/cpufreq/scaling_min_freq')}"
+          f"-{read_first(CPU / 'cpu0/cpufreq/scaling_max_freq')} kHz")
+    turbo = read_first(PSTATE / "no_turbo")
+    print(f"{'turbo':<16} {'off' if turbo == '1' else 'on'}")
+    print(f"{'pstate':<16} {read_first(PSTATE / 'status')}")
+    aspm = read_first("/sys/module/pcie_aspm/parameters/policy")
+    print(f"{'aspm':<16} {aspm[aspm.find('[') + 1:aspm.find(']')] if '[' in aspm else aspm}")
+    # Solo sysfs: lspci y nvidia-smi DESPIERTAN el puente y falsean la lectura.
+    if gpu_present():
+        print(f"{'dGPU':<16} presente en el bus")
+    else:
+        est_pt = read_first(f"/sys/bus/pci/devices/{NVIDIA_ROOT_PORT}/power_state")
+        print(f"{'dGPU':<16} fuera del bus (puente en {est_pt})")
+    print(f"{'ventilador':<16} "
+          f"{read_first(FAN_SYS) if FAN_SYS.exists() else 'sin control (falta linuwu_sense)'}")
+    return 0
+
+
+def cmd_medir(args):
+    """Mediana de muestras en reposo. Descarta las muestras con la CPU
+    ocupada, para que comparar dos configuraciones tenga sentido."""
+    dur, umbral = args.segundos, 12
+    muestras, descartadas = [], 0
+
+    def cpu_tick():
+        campos = Path("/proc/stat").read_text().split("\n")[0].split()[1:]
+        nums = [int(x) for x in campos]
+        return sum(nums), nums[3] + nums[4]
+
+    tot0, idle0 = cpu_tick()
+    fin = time.monotonic() + dur
+    while time.monotonic() < fin:
+        time.sleep(2)
+        tot1, idle1 = cpu_tick()
+        dt, di = tot1 - tot0, idle1 - idle0
+        ocupada = 100 * (dt - di) // dt if dt else 0
+        tot0, idle0 = tot1, idle1
+        p = potencia_mw()
+        if p is None:
+            continue
+        if ocupada > umbral:
+            descartadas += 1
+            continue
+        muestras.append(p)
+
+    if len(muestras) < 3:
+        print(f"muestras insuficientes ({len(muestras)}); "
+              f"{descartadas} descartadas por actividad")
+        return 1
+    muestras.sort()
+    print(f"consumo mediano: {muestras[len(muestras) // 2]} mW   "
+          f"(n={len(muestras)}, {descartadas} descartadas, "
+          f"rango {muestras[0]}-{muestras[-1]})")
+    return 0
+
+
+def cmd_gpu(args):
+    if os.geteuid() != 0:
+        print("gpu on|off requiere root")
+        return 1
+    return 0 if (gpu_on() if args.estado == "on" else gpu_off()) else 1
+
+
+def cmd_fan(args):
+    """Curva de ventiladores. El sysfs de linuwu_sense solo acepta 0 (curva
+    del EC) o un porcentaje fijo, asi que la curva se implementa aqui."""
+    if not FAN_SYS.exists():
+        print("no hay control de ventiladores: falta el modulo linuwu_sense")
+        return 1
+    if os.geteuid() != 0:
+        print("fan requiere root")
+        return 1
+
+    cfg = leer_config()
+    t0 = cfg.getint("ventiladores", "temp_minima", fallback=40)
+    hist = cfg.getint("ventiladores", "histeresis", fallback=3)
+    curva = []
+    for par in cfg.get("ventiladores", "curva",
+                       fallback="50:20,60:35,70:55,80:75,99:100").split(","):
+        lim, pct = par.split(":")
+        curva.append((int(lim), int(pct)))
+    curva.sort()
+
+    def pct_para(t):
+        if t < t0:
+            return 0
+        for lim, pct in curva:
+            if t < lim:
+                return pct
+        return 100
+
+    print(f"curva activa: parados por debajo de {t0} C. Ctrl-C para salir.")
+    anterior = -1
+    try:
+        while True:
+            t = int(read_first("/sys/class/thermal/thermal_zone0/temp", "0")) // 1000
+            pct = pct_para(t)
+            # Histeresis: para bajar de escalon exige margen, si no oscila.
+            if anterior >= 0 and pct < anterior and pct_para(t + hist) >= anterior:
+                pct = anterior
+            if pct != anterior:
+                write_sysfs(FAN_SYS, f"{pct},{pct}")
+                print(f"{t} C -> ventiladores {pct} %")
+                anterior = pct
+            time.sleep(5)
+    except KeyboardInterrupt:
+        write_sysfs(FAN_SYS, "0,0")
+        print("\ndevuelto al control automatico del EC")
+    return 0
+
+
+def main():
+    import argparse
+    ap = argparse.ArgumentParser(
+        prog="acer-powersave",
+        description="Ajustes de energia para Acer Predator/Nitro")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("daemon", help="seguir el perfil de power-profiles-daemon")
+    sub.add_parser("status", help="estado actual del sistema")
+    m = sub.add_parser("medir", help="consumo mediano en reposo")
+    m.add_argument("segundos", nargs="?", type=int, default=30)
+    g = sub.add_parser("gpu", help="encender o apagar la dGPU en caliente")
+    g.add_argument("estado", choices=["on", "off"])
+    sub.add_parser("fan", help="aplicar la curva de ventiladores")
+
+    args = ap.parse_args()
+    return {"daemon": cmd_daemon, "status": cmd_status, "medir": cmd_medir,
+            "gpu": cmd_gpu, "fan": cmd_fan}[args.cmd](args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

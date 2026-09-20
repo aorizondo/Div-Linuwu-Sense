@@ -1,0 +1,16 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    remove|purge)
+        # Al desaparecer el drop-in hay que devolver el cmdline al estado
+        # anterior, o GRUB seguiria arrancando con los parametros del paquete.
+        if command -v update-grub >/dev/null && [ -d /boot/grub ]; then
+            update-grub || true
+        fi
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

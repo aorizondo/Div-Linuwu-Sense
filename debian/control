@@ -1,0 +1,71 @@
+Source: linuwu-sense
+Section: kernel
+Priority: optional
+Maintainer: Antonio Orizondo Leyva <aorizondoleyva@gmail.com>
+Build-Depends:
+ debhelper-compat (= 13),
+ dh-sequence-dkms,
+ dh-sequence-python3,
+Standards-Version: 4.7.4
+Rules-Requires-Root: no
+Testsuite: autopkgtest-pkg-dkms
+Homepage: https://github.com/aorizondo/Div-Linuwu-Sense
+Vcs-Browser: https://github.com/aorizondo/Div-Linuwu-Sense
+Vcs-Git: https://github.com/aorizondo/Div-Linuwu-Sense.git
+
+Package: linuwu-sense-dkms
+Architecture: all
+Depends:
+ ${misc:Depends},
+Recommends:
+ linux-headers-amd64 | linux-headers-generic | linux-headers,
+ mokutil,
+Conflicts: linuwu-sense
+Replaces: linuwu-sense
+Provides: linuwu-sense-kernel
+Description: driver WMI para portatiles Acer Predator y Nitro (fuente DKMS)
+ linuwu_sense sustituye al driver acer_wmi incluido en el kernel y anade las
+ funciones que la version del kernel no expone en portatiles Acer de la gama
+ gaming: control de ventiladores, perfiles termicos con modo Turbo, limitador
+ de carga de bateria al 80 %, calibracion de bateria, retroiluminacion RGB de
+ cuatro zonas, LCD override y carga USB con el equipo apagado.
+ .
+ El modulo se compila en la propia maquina mediante DKMS, de forma que se
+ reconstruye solo con cada actualizacion del kernel.
+ .
+ Este paquete es un fork de Div-Linuwu-Sense que anade compatibilidad con la
+ API platform_profile de los kernels anteriores a 6.13 (como el 6.12 LTS de
+ Debian 13) y completa el quirk del Predator PH315-53.
+
+Package: acer-powersave
+Architecture: all
+Depends:
+ ${misc:Depends},
+ ${python3:Depends},
+ python3-gi,
+ gir1.2-glib-2.0,
+ power-profiles-daemon,
+Recommends:
+ linuwu-sense-dkms,
+ libkf6screen-bin | kscreen,
+Suggests:
+ powertop,
+Conflicts: tlp, auto-cpufreq, tuned
+Description: ajustes de energia para portatiles Acer Predator y Nitro
+ Aplica automaticamente los ajustes de energia que corresponden al perfil
+ activo de power-profiles-daemon, sin mantener estado propio en disco: el
+ perfil de PPD es la unica fuente de verdad. En KDE, PowerDevil ya traduce
+ conectado y bateria a perfil, de modo que esto sigue al cable y respeta
+ ademas el cambio manual del usuario.
+ .
+ Incluye:
+  * gobernador, EPP y turbo de la CPU por perfil;
+  * tasa de refresco del panel por perfil, mediante un servicio de sesion
+    (Plasma no trae esta funcion: PowerDevil no gestiona la configuracion de
+    pantalla);
+  * encendido y apagado en caliente de la GPU NVIDIA Optimus, sin reiniciar y
+    sin necesidad de envycontrol;
+  * curva de ventiladores con histeresis, si esta el modulo linuwu_sense;
+  * medicion de consumo en reposo con descarte de muestras con actividad.
+ .
+ No toca el brillo de la pantalla ni la retroiluminacion del teclado.

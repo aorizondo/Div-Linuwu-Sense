@@ -1,0 +1,28 @@
+.TH ACER\-POWERSAVE\-SESSION 1 "2026-09-20" "1.0.0" "Manual del usuario"
+.SH NOMBRE
+acer\-powersave\-session \- tasa de refresco segun el perfil de energia
+.SH SINOPSIS
+.B acer\-powersave\-session
+.SH DESCRIPCION
+Cambia la tasa de refresco del panel segun el perfil activo de
+.BR power\-profiles\-daemon (8).
+.PP
+Corre como servicio de usuario y no dentro del demonio de sistema porque
+.BR kscreen\-doctor (1)
+necesita la sesion Wayland del usuario, que root no tiene.
+.PP
+Plasma no trae esta funcion: PowerDevil declara explicitamente que no gestiona
+la configuracion de pantalla.
+.SH USO
+.nf
+systemctl \-\-user enable \-\-now acer\-powersave\-session.service
+.fi
+.SH FICHEROS
+.TP
+.I ~/.config/acer-powersave-session.conf
+Permite redefinir PANEL, RES y los valores HZ_POWER_SAVER, HZ_BALANCED y
+HZ_PERFORMANCE.
+.SH VEASE TAMBIEN
+.BR acer\-powersave (1)
+.SH AUTOR
+Antonio Orizondo Leyva

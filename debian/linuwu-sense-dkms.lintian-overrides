@@ -1,0 +1,5 @@
+# El README.Debian esta en espanol; "requiere" no es una errata de "require".
+spelling-error-in-readme-debian requiere require *
+# DKMS necesita esta estructura: el dkms.conf declara BUILT_MODULE_LOCATION=src
+# porque el Makefile upstream usa "obj-m := src/linuwu_sense.o".
+repeated-path-segment src *

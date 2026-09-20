@@ -528,6 +528,16 @@ static struct quirk_entry quirk_acer_predator_ph315_53 = {
     .turbo = 1,
     .cpu_fans = 1,
     .gpu_fans = 1,
+    /*
+     * El PH315-53 expone el interfaz gaming completo: el metodo WMBH del
+     * firmware implementa 0x14/0x15 (set/get gaming kb backlight) sobre los
+     * registros KBLE/KBLS/KBBP/KBCS/KBED/KBCR/KBCG/KBCB del EC, que es el
+     * teclado RGB de cuatro zonas. Sin estos dos flags no se crea ni
+     * predator_sense/ ni four_zoned_kb/, y hacia falta cargar el modulo con
+     * enable_all=1 para suplirlos.
+     */
+    .predator_v4 = 1,
+    .four_zone_kb = 1,
 };
 
 static struct quirk_entry quirk_acer_predator_phn16_71 = {
@@ -969,6 +979,104 @@ static const struct dmi_system_id non_acer_quirks[] __initconst = {
 
 static struct device *platform_profile_device;
 static bool platform_profile_support;
+
+/*
+ * Compatibilidad de la API platform_profile.
+ *
+ * Kernel >= 6.13 usa una API basada en device: platform_profile_register()
+ * devuelve un struct device *, recibe un struct platform_profile_ops con
+ * .probe/.profile_get/.profile_set y platform_profile_notify() toma ese device.
+ *
+ * Kernel < 6.13 (p.ej. 6.12 LTS, el de Debian 13) usa struct
+ * platform_profile_handler: sin .probe, los "choices" se rellenan a mano,
+ * profile_get/set reciben el handler y platform_profile_notify() no toma
+ * argumentos.
+ *
+ * Aqui se emula la API nueva sobre la vieja para que el resto del driver no
+ * tenga que duplicarse. acer_predator_v4_platform_profile_{get,set} declaran
+ * un struct device * que no usan, de modo que pasarles NULL es seguro.
+ */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 13, 0)
+
+struct platform_profile_ops {
+	int (*probe)(void *drvdata, unsigned long *choices);
+	int (*profile_get)(struct device *dev,
+			   enum platform_profile_option *profile);
+	int (*profile_set)(struct device *dev,
+			   enum platform_profile_option profile);
+};
+
+static const struct platform_profile_ops *acer_compat_pprof_ops;
+static struct platform_profile_handler acer_compat_pprof_handler;
+
+static int acer_compat_pprof_get(struct platform_profile_handler *pprof,
+				 enum platform_profile_option *profile)
+{
+	return acer_compat_pprof_ops->profile_get(NULL, profile);
+}
+
+static int acer_compat_pprof_set(struct platform_profile_handler *pprof,
+				 enum platform_profile_option profile)
+{
+	return acer_compat_pprof_ops->profile_set(NULL, profile);
+}
+
+static void acer_compat_pprof_release(void *data)
+{
+	platform_profile_remove();
+}
+
+static struct device *
+acer_platform_profile_register(struct device *dev, const char *name,
+			       void *drvdata,
+			       const struct platform_profile_ops *ops)
+{
+	int err;
+
+	acer_compat_pprof_ops = ops;
+	memset(&acer_compat_pprof_handler, 0, sizeof(acer_compat_pprof_handler));
+	acer_compat_pprof_handler.profile_get = acer_compat_pprof_get;
+	acer_compat_pprof_handler.profile_set = acer_compat_pprof_set;
+
+	if (ops->probe) {
+		err = ops->probe(drvdata, acer_compat_pprof_handler.choices);
+		if (err)
+			return ERR_PTR(err);
+	}
+
+	err = platform_profile_register(&acer_compat_pprof_handler);
+	if (err)
+		return ERR_PTR(err);
+
+	/* replica la semantica devm_ de la API nueva */
+	err = devm_add_action_or_reset(dev, acer_compat_pprof_release, NULL);
+	if (err)
+		return ERR_PTR(err);
+
+	return dev;
+}
+
+static inline void acer_platform_profile_notify(void)
+{
+	platform_profile_notify();
+}
+
+#else /* >= 6.13: API nativa basada en device */
+
+static inline struct device *
+acer_platform_profile_register(struct device *dev, const char *name,
+			       void *drvdata,
+			       const struct platform_profile_ops *ops)
+{
+	return devm_platform_profile_register(dev, name, drvdata, ops);
+}
+
+static inline void acer_platform_profile_notify(void)
+{
+	platform_profile_notify(platform_profile_device);
+}
+
+#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(6, 13, 0) */
 
 /*
  * The profile used before turbo mode. This variable is needed for
@@ -2501,7 +2609,7 @@ static int acer_platform_profile_setup(struct platform_device *device)
 
         for (retry = 0; retry < max_retries; retry++)
         {
-            platform_profile_device = devm_platform_profile_register(
+            platform_profile_device = acer_platform_profile_register(
                 &device->dev, "acer-wmi", NULL, &acer_predator_v4_platform_profile_ops);
 
             if (!IS_ERR(platform_profile_device))
@@ -2634,7 +2742,7 @@ static int acer_thermal_profile_change(void)
         if (tp != acer_predator_v4_max_perf)
             last_non_turbo_profile = tp;
 
-        platform_profile_notify(platform_profile_device);
+        acer_platform_profile_notify();
     }
 
     return 0;

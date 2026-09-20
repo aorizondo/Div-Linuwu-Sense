@@ -1,0 +1,58 @@
+acer-powersave para Debian
+==========================
+
+Conflicto con otros gestores de energia
+---------------------------------------
+No instales TLP, tuned ni auto-cpufreq junto a esto: todos compiten por los
+mismos ajustes y power-profiles-daemon los declara en Conflicts. Si TLP estuvo
+instalado, comprueba que no dejo enmascarado PPD:
+
+    systemctl is-enabled power-profiles-daemon.service   # no debe decir masked
+
+Conflicto con PowerDevil "Ejecutar un script"
+---------------------------------------------
+Si tenias configurada la accion "Ejecutar un script" de PowerDevil para tocar
+la CPU (por ejemplo "sudo cpupower frequency-set ..."), quitala: pelea con PPD
+y con este servicio, y el resultado depende de quien escriba el ultimo. Mira
+~/.config/powerdevilrc, secciones [AC][RunScript] y [Battery][RunScript].
+
+Servicio de sesion
+------------------
+La tasa de refresco solo puede cambiarla quien tenga la sesion grafica, asi
+que va en un servicio de usuario aparte:
+
+    systemctl --user enable --now acer-powersave-session.service
+
+Parametros de arranque
+----------------------
+El paquete instala /etc/default/grub.d/50-acer-powersave.cfg, que ajusta la
+linea de comandos del kernel sin tocar tu /etc/default/grub:
+
+ * elimina intel_pstate=passive, que deja el governor clavado en la frecuencia
+   minima incluso con carga y vuelve inoperante el EPP;
+ * elimina pci_aspm=force, que no es un parametro valido (el correcto es
+   pcie_aspm);
+ * anade pcie_aspm=force, i915.enable_fbc=1 e i915.enable_dc=2 si faltan.
+
+Desinstalar el paquete revierte el cambio y vuelve a ejecutar update-grub.
+
+GPU NVIDIA
+----------
+"acer-powersave gpu off" descarga los modulos, retira la tarjeta del bus PCI y
+deja que el puente caiga a D3cold; "gpu on" la devuelve. No hace falta
+reiniciar ni usar envycontrol.
+
+Si envycontrol dejo su regla udev, la tarjeta se expulsara nada mas aparecer:
+
+    sudo rm /etc/udev/rules.d/50-remove-nvidia.rules
+    sudo udevadm control --reload
+
+Y si /etc/modprobe.d/blacklist-nvidia.conf contiene lineas "alias nvidia off",
+quitalas: impiden cargar el driver incluso invocandolo a mano.
+
+Para comprobar el estado usa siempre sysfs. "lspci" y "nvidia-smi" DESPIERTAN
+el puente y devuelven una lectura falsa:
+
+    cat /sys/bus/pci/devices/0000:00:01.0/power_state    # D3cold = apagada
+
+ -- Antonio Orizondo Leyva <aorizondoleyva@gmail.com>

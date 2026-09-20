@@ -1,0 +1,61 @@
+.TH ACER\-POWERSAVE 1 "2026-09-20" "1.0.0" "Manual del usuario"
+.SH NOMBRE
+acer\-powersave \- ajustes de energia para portatiles Acer Predator y Nitro
+.SH SINOPSIS
+.B acer\-powersave
+.I orden
+.RI [ argumentos ]
+.SH DESCRIPCION
+Aplica los ajustes de energia que corresponden al perfil activo de
+.BR power\-profiles\-daemon (8),
+sin mantener estado propio en disco: el perfil de PPD es la unica fuente de
+verdad. En KDE, PowerDevil ya traduce conectado y bateria a perfil, de modo que
+esto sigue al cable y respeta ademas el cambio manual del usuario.
+.PP
+No toca el brillo de la pantalla ni la retroiluminacion del teclado.
+.SH ORDENES
+.TP
+.B daemon
+Sigue el perfil activo de power\-profiles\-daemon y aplica los ajustes
+privilegiados. Es lo que ejecuta el servicio
+.BR acer\-powersave.service .
+.TP
+.B status
+Muestra consumo, perfil, gobernador, EPP, frecuencia, turbo, ASPM, estado de la
+GPU dedicada y de los ventiladores.
+.TP
+.BI medir " [segundos]"
+Mide el consumo mediano en reposo, descartando las muestras tomadas con la CPU
+ocupada para que comparar dos configuraciones tenga sentido. Por omision, 30
+segundos.
+.TP
+.BI gpu " on\fR|\fPoff"
+Enciende o apaga la GPU NVIDIA Optimus en caliente, sin reiniciar. Requiere
+privilegios de root.
+.TP
+.B fan
+Aplica una curva de ventiladores con histeresis, leida de
+.IR /etc/acer\-powersave/profiles.conf .
+Necesita el modulo linuwu_sense. Requiere privilegios de root.
+.SH FICHEROS
+.TP
+.I /etc/acer-powersave/profiles.conf
+Ajustes aplicados en cada perfil.
+.TP
+.I /etc/default/grub.d/50-acer-powersave.cfg
+Parametros de arranque recomendados.
+.SH NOTAS
+Para consultar si la GPU dedicada esta apagada hay que leer sysfs:
+.BR lspci (8)
+y
+.BR nvidia\-smi (1)
+despiertan el puente PCIe y devuelven una lectura falsa.
+.PP
+.nf
+cat /sys/bus/pci/devices/0000:00:01.0/power_state
+.fi
+.SH VEASE TAMBIEN
+.BR acer\-powersave\-session (1),
+.BR powerprofilesctl (1)
+.SH AUTOR
+Antonio Orizondo Leyva

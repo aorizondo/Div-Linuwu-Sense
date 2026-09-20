@@ -1,0 +1,7 @@
+#!/bin/sh
+set -e
+v=$(dpkg-parsechangelog -SVersion | sed -e 's/^[0-9]*://' -e 's/-[^-]*$//')
+echo "src/                                             usr/src/linuwu-sense-$v/"
+echo "Makefile                                         usr/src/linuwu-sense-$v/"
+echo "debian/runtime/modprobe.d/linuwu-sense.conf      usr/lib/modprobe.d/"
+echo "debian/runtime/modules-load.d/linuwu-sense.conf  usr/lib/modules-load.d/"

@@ -1,0 +1,18 @@
+[Unit]
+Description=Tasa de refresco segun el perfil de energia
+Documentation=https://github.com/aorizondo/Div-Linuwu-Sense
+# Corre como servicio de usuario porque kscreen-doctor necesita la sesion
+# Wayland del usuario, que root no tiene. Plasma ya exporta WAYLAND_DISPLAY y
+# XDG_RUNTIME_DIR al entorno de systemd --user.
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/acer-powersave-session
+Restart=on-failure
+RestartSec=5s
+Slice=background.slice
+
+[Install]
+WantedBy=graphical-session.target

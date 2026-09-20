@@ -1,0 +1,18 @@
+[Unit]
+Description=Permisos sysfs de linuwu_sense y descarga ordenada al apagar
+Documentation=https://github.com/aorizondo/Div-Linuwu-Sense
+After=systemd-modules-load.service
+Wants=systemd-modules-load.service
+ConditionPathExists=/sys/module/linuwu_sense
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# tmpfiles.d corre demasiado pronto en el arranque, antes de que el modulo
+# exista, asi que los permisos se aplican aqui una vez cargado.
+ExecStart=/usr/bin/systemd-tmpfiles --create /usr/lib/tmpfiles.d/linuwu-sense.conf
+# Descargar el modulo al apagar evita que el EC quede con el estado a medias.
+ExecStop=-/usr/sbin/rmmod linuwu_sense
+
+[Install]
+WantedBy=multi-user.target

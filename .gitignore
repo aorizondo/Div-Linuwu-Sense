@@ -1,0 +1,24 @@
+*.o
+*.ko
+*.mod
+*.mod.c
+*.cmd
+.*.cmd
+*.symvers
+*.order
+.tmp_versions/
+Module.symvers
+modules.order
+src/.*.cmd
+.module-common.o
+
+# artefactos de dpkg-buildpackage
+debian/linuwu-sense-dkms/
+debian/acer-powersave/
+debian/.debhelper/
+debian/debhelper-build-stamp
+debian/files
+debian/*.substvars
+debian/*.debhelper
+debian/*.debhelper.log
+debian/tmp/

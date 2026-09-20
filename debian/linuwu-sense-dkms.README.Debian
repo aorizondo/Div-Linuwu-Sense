@@ -1,0 +1,60 @@
+linuwu-sense-dkms para Debian
+=============================
+
+Sustitucion de acer_wmi
+-----------------------
+Este modulo reemplaza al acer_wmi del kernel: ambos enlazan con los mismos
+GUID de ACPI-WMI y no pueden convivir. El paquete instala
+
+    /usr/lib/modprobe.d/linuwu-sense.conf
+
+con "blacklist acer_wmi" mas "install acer_wmi /bin/true" (lo segundo hace
+falta porque el blacklist por si solo no impide que el kernel autocargue el
+modulo). Al desinstalar el paquete el fichero desaparece y acer_wmi vuelve.
+
+El paquete NO descarga modulos durante la instalacion: hacerlo puede colgar el
+sistema si hay dispositivos en uso. Tras instalar, reinicia, o bien:
+
+    sudo modprobe -r acer_wmi && sudo modprobe linuwu_sense
+
+Para volver a acer_wmi sin desinstalar, crea
+/etc/modprobe.d/zz-local-acer-wmi.conf con:
+
+    install acer_wmi /sbin/modprobe --ignore-install acer_wmi
+
+Secure Boot
+-----------
+Si Secure Boot esta activo, el modulo debe ir firmado o el kernel lo rechaza
+("Key was rejected by service"). DKMS lo gestiona solo, pero hay que enrolar
+la clave una vez:
+
+    sudo dkms generate_mok                       # si no existe ya
+    sudo mokutil --import /var/lib/dkms/mok.pub
+    # reiniciar, elegir "Enroll MOK" e introducir la contrasena
+    sudo dkms autoinstall
+
+Comprueba el estado con "mokutil --sb-state". La clave sobrevive a las
+actualizaciones de kernel: solo se enrola una vez, y DKMS vuelve a firmar en
+cada reconstruccion.
+
+Permisos
+--------
+Los atributos sysfs pertenecen al grupo linuwu_sense. Para manejarlos sin sudo:
+
+    sudo usermod -aG linuwu_sense $USER      # requiere volver a iniciar sesion
+
+Rutas (segun modelo):
+
+    /sys/module/linuwu_sense/drivers/platform:acer-wmi/acer-wmi/predator_sense/
+    /sys/module/linuwu_sense/drivers/platform:acer-wmi/acer-wmi/nitro_sense/
+    /sys/module/linuwu_sense/drivers/platform:acer-wmi/acer-wmi/four_zoned_kb/
+
+Diferencias con el upstream
+---------------------------
+ * Compatibilidad con la API platform_profile anterior a 6.13. El upstream usa
+   devm_platform_profile_register() y platform_profile_notify(dev), que no
+   existen en el kernel 6.12 LTS de Debian 13.
+ * Quirk del Predator PH315-53 completado con predator_v4 y four_zone_kb.
+ * Makefile que respeta KERNELRELEASE, necesario para DKMS.
+
+ -- Antonio Orizondo Leyva <aorizondoleyva@gmail.com>

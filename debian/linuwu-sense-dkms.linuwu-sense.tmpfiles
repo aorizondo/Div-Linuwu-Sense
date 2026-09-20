@@ -1,0 +1,17 @@
+# Permisos de los atributos sysfs del driver. El sufijo "-" del tipo hace que
+# se ignore el fallo cuando el atributo no existe: cada modelo expone solo su
+# subdirectorio (predator_sense o nitro_sense) y el RGB solo en los equipos con
+# teclado de cuatro zonas.
+z- /sys/module/linuwu_sense/drivers/platform:acer-wmi/acer-wmi/predator_sense/backlight_timeout 0660 root linuwu_sense -
+z- /sys/module/linuwu_sense/drivers/platform:acer-wmi/acer-wmi/predator_sense/battery_calibration 0660 root linuwu_sense -
+z- /sys/module/linuwu_sense/drivers/platform:acer-wmi/acer-wmi/predator_sense/battery_limiter 0660 root linuwu_sense -
+z- /sys/module/linuwu_sense/drivers/platform:acer-wmi/acer-wmi/predator_sense/boot_animation_sound 0660 root linuwu_sense -
+z- /sys/module/linuwu_sense/drivers/platform:acer-wmi/acer-wmi/predator_sense/fan_speed 0660 root linuwu_sense -
+z- /sys/module/linuwu_sense/drivers/platform:acer-wmi/acer-wmi/predator_sense/lcd_override 0660 root linuwu_sense -
+z- /sys/module/linuwu_sense/drivers/platform:acer-wmi/acer-wmi/predator_sense/usb_charging 0660 root linuwu_sense -
+z- /sys/module/linuwu_sense/drivers/platform:acer-wmi/acer-wmi/nitro_sense/battery_calibration 0660 root linuwu_sense -
+z- /sys/module/linuwu_sense/drivers/platform:acer-wmi/acer-wmi/nitro_sense/battery_limiter 0660 root linuwu_sense -
+z- /sys/module/linuwu_sense/drivers/platform:acer-wmi/acer-wmi/nitro_sense/fan_speed 0660 root linuwu_sense -
+z- /sys/module/linuwu_sense/drivers/platform:acer-wmi/acer-wmi/nitro_sense/usb_charging 0660 root linuwu_sense -
+z- /sys/module/linuwu_sense/drivers/platform:acer-wmi/acer-wmi/four_zoned_kb/four_zone_mode 0660 root linuwu_sense -
+z- /sys/module/linuwu_sense/drivers/platform:acer-wmi/acer-wmi/four_zoned_kb/per_zone_mode 0660 root linuwu_sense -

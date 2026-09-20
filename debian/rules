@@ -1,0 +1,35 @@
+#!/usr/bin/make -f
+include /usr/share/dpkg/pkg-info.mk
+
+%:
+	dh $@
+
+# El modulo lo compila DKMS en la maquina del usuario, no aqui. Sin estos
+# override, dh detecta el Makefile de la raiz y compilaria contra el kernel
+# del builder.
+override_dh_auto_configure:
+override_dh_auto_build:
+override_dh_auto_test:
+override_dh_auto_install:
+override_dh_auto_clean:
+
+override_dh_dkms:
+	dh_dkms -V $(DEB_VERSION_UPSTREAM)
+
+# Las unidades cuyo nombre no coincide con el del paquete necesitan --name
+# explicito, o debhelper las ignora.
+override_dh_installsystemd:
+	dh_installsystemd -plinuwu-sense-dkms --name=linuwu-sense
+	dh_installsystemd -pacer-powersave
+
+override_dh_installsystemduser:
+	dh_installsystemduser -pacer-powersave --name=acer-powersave-session
+
+override_dh_installtmpfiles:
+	dh_installtmpfiles -plinuwu-sense-dkms --name=linuwu-sense
+	dh_installtmpfiles -pacer-powersave
+
+# dh_installsysusers no entra en la secuencia por defecto de debhelper 13, y el
+# grupo tiene que existir antes de que tmpfiles ajuste los permisos sysfs.
+execute_after_dh_installinit:
+	dh_installsysusers

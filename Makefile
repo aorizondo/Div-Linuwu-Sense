@@ -1,7 +1,10 @@
 obj-m := src/linuwu_sense.o
 
-KVER  ?= $(shell uname -r)
-KDIR  := /lib/modules/$(KVER)/build
+# DKMS compila para kernels distintos del que corre ahora: si kbuild nos pasa
+# KERNELRELEASE hay que respetarlo en vez de asumir uname -r. KDIR con ?= para
+# poder apuntarlo a otro arbol de headers desde fuera.
+KVER  ?= $(if $(KERNELRELEASE),$(KERNELRELEASE),$(shell uname -r))
+KDIR  ?= /lib/modules/$(KVER)/build
 PWD   := $(shell pwd)
 
 MDIR  := /lib/modules/$(KVER)/kernel/drivers/platform/x86

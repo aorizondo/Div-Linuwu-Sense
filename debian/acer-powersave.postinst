@@ -1,0 +1,17 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+        # El drop-in de /etc/default/grub.d/ solo surte efecto tras regenerar
+        # la configuracion de GRUB. No se toca /etc/default/grub del usuario.
+        if command -v update-grub >/dev/null && [ -d /boot/grub ]; then
+            echo "acer-powersave: regenerando la configuracion de GRUB..."
+            update-grub || echo "acer-powersave: update-grub fallo; revisa /etc/default/grub.d/50-acer-powersave.cfg" >&2
+        fi
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

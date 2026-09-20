@@ -1,0 +1,14 @@
+linuwu-sense (1.0.0) unstable; urgency=medium
+
+  * Primer empaquetado Debian del fork.
+  * Compatibilidad con la API platform_profile anterior a 6.13: el driver
+    usaba devm_platform_profile_register() y platform_profile_notify(dev),
+    que no existen en el kernel 6.12 LTS de Debian 13. Se emula la API nueva
+    sobre platform_profile_handler.
+  * Quirk del Predator PH315-53 completado con predator_v4 y four_zone_kb:
+    sin ellos no se creaban predator_sense/ ni four_zoned_kb/ y hacia falta
+    cargar el modulo con enable_all=1.
+  * Makefile: respetar KERNELRELEASE para que DKMS pueda compilar para
+    kernels distintos del que esta corriendo.
+
+ -- Antonio Orizondo Leyva <aorizondoleyva@gmail.com>  Sun, 20 Sep 2026 14:00:00 +0000

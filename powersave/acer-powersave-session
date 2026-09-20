@@ -1,0 +1,57 @@
+#!/bin/bash
+# Parte de sesion de acer-powersave.
+#
+# La tasa de refresco solo puede cambiarla alguien que tenga la sesion Wayland
+# del usuario: root no la tiene. Por eso esto corre como servicio de usuario y
+# no dentro del demonio de sistema.
+#
+# KDE no trae cambio de refresco por fuente de alimentacion: PowerDevil declara
+# explicitamente que no gestiona la configuracion de pantalla. De ahi este
+# script.
+set -u
+
+CONF=${XDG_CONFIG_HOME:-$HOME/.config}/acer-powersave-session.conf
+PANEL=${PANEL:-eDP-1}
+HZ_POWER_SAVER=60
+HZ_BALANCED=60
+HZ_PERFORMANCE=144
+RES=1920x1080
+[ -r "$CONF" ] && . "$CONF"
+
+hz_de_perfil() {
+    case "$1" in
+        power-saver) echo "$HZ_POWER_SAVER" ;;
+        balanced)    echo "$HZ_BALANCED" ;;
+        performance) echo "$HZ_PERFORMANCE" ;;
+        *)           echo "" ;;
+    esac
+}
+
+hz_actual() {
+    kscreen-doctor -o 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' \
+        | grep -o "${RES}@[0-9]*\*" | tr -d '*' | cut -d@ -f2
+}
+
+aplicar() {
+    local hz; hz=$(hz_de_perfil "$1")
+    [ -n "$hz" ] || return 0
+    [ "$(hz_actual)" = "$hz" ] && return 0
+    kscreen-doctor "output.${PANEL}.mode.${RES}@${hz}" >/dev/null 2>&1 \
+        && echo "perfil $1 -> ${hz} Hz"
+}
+
+# Estado inicial: la senal puede no llegar nunca, asi que no basta con esperarla.
+aplicar "$(powerprofilesctl get 2>/dev/null)"
+
+# stdbuf porque gdbus bufferea y los eventos llegarian a rafagas.
+stdbuf -oL gdbus monitor --system \
+    --dest org.freedesktop.UPower.PowerProfiles \
+    --object-path /org/freedesktop/UPower/PowerProfiles 2>/dev/null \
+| while IFS= read -r linea; do
+    case "$linea" in
+        *"'ActiveProfile':"*) ;;
+        *) continue ;;
+    esac
+    perfil=$(sed -n "s/.*'ActiveProfile': <'\([^']*\)'>.*/\1/p" <<<"$linea")
+    [ -n "$perfil" ] && aplicar "$perfil"
+done

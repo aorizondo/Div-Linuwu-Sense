@@ -1,0 +1,67 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  construir:
+    name: Construir los .deb
+    runs-on: ubuntu-latest
+    container:
+      image: debian:trixie-slim
+    steps:
+      - name: Instalar herramientas de empaquetado
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential debhelper dh-dkms dh-python devscripts lintian \
+            fakeroot git ca-certificates
+
+      - uses: actions/checkout@v7
+
+      - name: Construir
+        run: dpkg-buildpackage -us -uc -b --no-sign
+        env:
+          DEB_BUILD_OPTIONS: noautodbgsym
+
+      - name: Recoger artefactos y sumas
+        run: |
+          mkdir -p debs
+          mv ../*.deb ../*.buildinfo ../*.changes debs/ 2>/dev/null || true
+          ( cd debs && sha256sum *.deb > SHA256SUMS )
+          ls -la debs/
+
+      - name: Lintian
+        run: lintian --fail-on error debs/*.changes
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: debs
+          path: debs/
+
+  publicar:
+    name: Publicar el release
+    needs: construir
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # solo este job necesita escribir
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: debs
+          path: debs
+
+      - name: Comprobar que hay artefactos
+        run: ls -la debs/ && test -n "$(ls debs/*.deb)"
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            debs/*.deb
+            debs/SHA256SUMS
+          generate_release_notes: true
+          draft: false

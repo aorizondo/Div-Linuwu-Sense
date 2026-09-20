@@ -1,0 +1,13 @@
+PACKAGE_NAME="linuwu-sense"
+PACKAGE_VERSION="#MODULE_VERSION#"
+
+BUILT_MODULE_NAME[0]="linuwu_sense"
+# obj-m := src/linuwu_sense.o  =>  el .ko queda en src/
+BUILT_MODULE_LOCATION[0]="src"
+DEST_MODULE_NAME[0]="linuwu_sense"
+DEST_MODULE_LOCATION[0]="/updates/dkms"
+
+MAKE[0]="make -C ${kernel_source_dir} M=${dkms_tree}/${PACKAGE_NAME}/${PACKAGE_VERSION}/build modules"
+
+AUTOINSTALL="yes"
+BUILD_EXCLUSIVE_KERNEL_MIN="6.1"
