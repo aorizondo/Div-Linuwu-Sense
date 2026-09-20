@@ -180,7 +180,10 @@ def aplicar(perfil, cfg):
     # El turbo va PRIMERO: activarlo o desactivarlo cambia cpuinfo_max_freq
     # (2,6 GHz sin turbo, 5,0 GHz con turbo), asi que fijar la frecuencia antes
     # dejaria un limite calculado sobre un rango que deja de ser valido.
-    turbo = s.get("turbo", "").strip()
+    # "cpu_turbo" es Intel Turbo Boost, NO el boton Turbo del Predator (ese lo
+    # gestiona linuwu_sense por su cuenta). Se acepta "turbo" como alias por
+    # compatibilidad con configuraciones antiguas.
+    turbo = s.get("cpu_turbo", s.get("turbo", "")).strip()
     if turbo in ("on", "off"):
         write_sysfs(PSTATE / "no_turbo", "0" if turbo == "on" else "1")
 
@@ -233,8 +236,11 @@ def aplicar(perfil, cfg):
         subprocess.run(["modprobe", "r8169"], capture_output=True, check=False)
 
     # --- Ventiladores ----------------------------------------------------
-    fan = s.get("fan", "").strip()
-    if fan and FAN_SYS.exists():
+    # Por defecto no se tocan los ventiladores: el boton Turbo los pone al
+    # maximo y su estado no es consultable desde sysfs, de modo que escribir
+    # fan_speed en cada cambio de perfil cancelaria el turbo sin querer.
+    fan = s.get("fan", "keep").strip()
+    if fan and fan != "keep" and FAN_SYS.exists():
         if fan == "auto":
             write_sysfs(FAN_SYS, "0,0")
         elif fan.isdigit():
