@@ -48,7 +48,10 @@ def write_sysfs(path, value):
     """Escribe en sysfs solo si existe y es escribible. Nunca lanza."""
     try:
         p = Path(path)
-        if not p.exists() or not os.access(p, os.W_OK):
+        if not p.exists():
+            return False
+        if not os.access(p, os.W_OK):
+            log(f"  aviso: {path} no es escribible")
             return False
         p.write_text(str(value))
         return True
@@ -174,16 +177,43 @@ def aplicar(perfil, cfg):
     # --- CPU -------------------------------------------------------------
     # Con intel_pstate en modo activo el governor debe quedarse en powersave
     # y quien manda es el EPP. En modo passive manda el governor.
+    # El turbo va PRIMERO: activarlo o desactivarlo cambia cpuinfo_max_freq
+    # (2,6 GHz sin turbo, 5,0 GHz con turbo), asi que fijar la frecuencia antes
+    # dejaria un limite calculado sobre un rango que deja de ser valido.
+    turbo = s.get("turbo", "").strip()
+    if turbo in ("on", "off"):
+        write_sysfs(PSTATE / "no_turbo", "0" if turbo == "on" else "1")
+
+    # Devolver los limites de frecuencia al rango del hardware. Sin esto, si
+    # otra herramienta los dejo clavados (el RunScript de PowerDevil con
+    # "cpupower --min 800 --max 800" es el caso tipico) el estado sobrevive
+    # indefinidamente y el EPP no puede hacer nada.
+    #
+    # Salvo en modo passive: ahi PPD no puede usar el EPP (necesita HWP, que
+    # solo existe en modo activo) e implementa power-saver recortando el
+    # scaling_max_freq. Escribirlo nosotros seria pelearnos con el por el mismo
+    # fichero, y gana quien escriba el ultimo. En modo activo PPD usa el EPP y
+    # deja la frecuencia en paz, asi que ahi si conviene normalizarla.
+    pstate_mode = read_first(PSTATE / "status")
+    if pstate_mode == "passive":
+        log("  frecuencia: la gestiona PPD (intel_pstate en modo passive)")
+    elif s.get("frecuencia", "auto").strip() == "auto":
+        hw_min = read_first(CPU / "cpu0/cpufreq/cpuinfo_min_freq")
+        hw_max = read_first(CPU / "cpu0/cpufreq/cpuinfo_max_freq")
+        if hw_min and hw_max:
+            # max antes que min: al reves el kernel rechaza min > max.
+            n1 = write_all("cpu*/cpufreq/scaling_max_freq", hw_max)
+            n2 = write_all("cpu*/cpufreq/scaling_min_freq", hw_min)
+            log(f"  frecuencia -> {hw_min}-{hw_max} kHz ({n1}/{n2} cpus)")
+        else:
+            log(f"  frecuencia: rango ilegible (min={hw_min!r} max={hw_max!r})")
+
     gov = s.get("governor", "").strip()
     if gov:
         write_all("cpu*/cpufreq/scaling_governor", gov)
     epp = s.get("epp", "").strip()
     if epp:
         write_all("cpu*/cpufreq/energy_performance_preference", epp)
-
-    turbo = s.get("turbo", "").strip()
-    if turbo in ("on", "off"):
-        write_sysfs(PSTATE / "no_turbo", "0" if turbo == "on" else "1")
 
     # --- dGPU ------------------------------------------------------------
     gpu = s.get("dgpu", "").strip()
