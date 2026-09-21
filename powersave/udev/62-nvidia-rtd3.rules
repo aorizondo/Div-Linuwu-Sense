@@ -1,0 +1,28 @@
+# Runtime PM de la GPU NVIDIA Optimus.
+#
+# Sin estas reglas el kernel deja power/control en "on" para la funcion VGA y
+# la tarjeta NUNCA hace runtime-suspend: se queda en D0 consumiendo del orden
+# de 7 a 10 W aunque no la use nadie. Verificado en un Predator PH315-53 con
+# RTX 2060: pasar a "auto" la hizo caer a D3cold en segundos.
+#
+# Las funciones de audio y USB-C se retiran a proposito: mientras quede un hijo
+# activo colgando del puente, el puerto raiz no puede alcanzar D3cold.
+#
+# Procede del fichero 80-nvidia-pm.rules que distribuye NVIDIA.
+
+# Retirar el controlador USB xHCI de la NVIDIA, si existe
+ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x10de", ATTR{class}=="0x0c0330", ATTR{remove}="1"
+
+# Retirar los dispositivos USB Type-C UCSI de la NVIDIA, si existen
+ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x10de", ATTR{class}=="0x0c8000", ATTR{remove}="1"
+
+# Retirar el audio HDMI de la NVIDIA, si existe
+ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x10de", ATTR{class}=="0x040300", ATTR{remove}="1"
+
+# Habilitar runtime PM al enlazar el driver con la VGA/3D
+ACTION=="bind", SUBSYSTEM=="pci", ATTR{vendor}=="0x10de", ATTR{class}=="0x030000", TEST=="power/control", ATTR{power/control}="auto"
+ACTION=="bind", SUBSYSTEM=="pci", ATTR{vendor}=="0x10de", ATTR{class}=="0x030200", TEST=="power/control", ATTR{power/control}="auto"
+
+# Y deshabilitarlo al desenlazar
+ACTION=="unbind", SUBSYSTEM=="pci", ATTR{vendor}=="0x10de", ATTR{class}=="0x030000", TEST=="power/control", ATTR{power/control}="on"
+ACTION=="unbind", SUBSYSTEM=="pci", ATTR{vendor}=="0x10de", ATTR{class}=="0x030200", TEST=="power/control", ATTR{power/control}="on"

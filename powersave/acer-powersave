@@ -161,6 +161,9 @@ def gpu_on():
     else:
         log("  dGPU: presente en el bus pero no se pudo cargar el driver")
 
+    # Runtime PM en la GPU, no solo en el puente: sin esto el kernel la deja
+    # en "on" y nunca suspende, quedandose en D0 a 7-10 W aunque no se use.
+    write_sysfs(f"/sys/bus/pci/devices/{NVIDIA_FUNCS[1]}/power/control", "auto")
     write_sysfs(f"/sys/bus/pci/devices/{NVIDIA_ROOT_PORT}/power/control", "auto")
     return True
 
