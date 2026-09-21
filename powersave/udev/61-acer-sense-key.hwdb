@@ -1,9 +1,36 @@
 # La tecla dedicada de los Acer gaming (PredatorSense en los Predator, la tecla
-# N en los Nitro) emite el scancode 0xf5. El kernel lo entrega como keycode 425,
-# que no tiene nombre simbolico en input-event-codes.h, de modo que los entornos
-# de escritorio no pueden ofrecerlo para asignarle un atajo.
+# N en los Nitro) emite el scancode 0xf5. La base de datos de systemd lo mapea
+# a "presentation", un nombre que ningun escritorio ofrece para asignar atajos,
+# asi que se remapea a prog1 (KEY_PROG1, 148), que si es asignable.
 #
-# Remapearlo a prog1 (keycode 148, KEY_PROG1) lo vuelve asignable desde
-# Preferencias del sistema. Verificado en un Predator PH315-53.
+# IMPORTANTE: hwdb aplica UNA SOLA regla por dispositivo y no fusiona
+# propiedades entre reglas. Una regla que solo declarase KEYBOARD_KEY_f5
+# dejaria sin efecto TODO el bloque de Acer de 60-keyboard.hwdb, incluidas las
+# teclas de brillo de pantalla y las del touchpad. Por eso se replica el bloque
+# completo, copiado de 60-keyboard.hwdb, cambiando solo esa linea.
 evdev:atkbd:dmi:bvn*:bvr*:bd*:svnAcer*:pn*:*
- KEYBOARD_KEY_f5=prog1
+ KEYBOARD_KEY_86=wlan                                   # Fn+F3 or Fn+Q for communication key
+ KEYBOARD_KEY_a5=help                                   # Fn+F1
+ KEYBOARD_KEY_a6=setup                                  # Fn+F2 Acer eSettings
+ KEYBOARD_KEY_a7=battery                                # Fn+F3 Power Management
+ KEYBOARD_KEY_a9=switchvideomode                        # Fn+F5
+ KEYBOARD_KEY_b2=www
+ KEYBOARD_KEY_b3=euro
+ KEYBOARD_KEY_b4=dollar
+ KEYBOARD_KEY_ce=brightnessup                           # Fn+Right
+ KEYBOARD_KEY_d4=bluetooth                              # (toggle) off-to-on
+ KEYBOARD_KEY_d5=wlan                                   # (toggle) on-to-off
+ KEYBOARD_KEY_d6=wlan                                   # (toggle) off-to-on
+ KEYBOARD_KEY_d7=bluetooth                              # (toggle) on-to-off
+ KEYBOARD_KEY_d8=bluetooth                              # (toggle) off-to-on
+ KEYBOARD_KEY_d9=brightnessup                           # Fn+Right
+ KEYBOARD_KEY_ee=brightnessup                           # Fn+Right
+ KEYBOARD_KEY_ef=brightnessdown                         # Fn+Left
+ KEYBOARD_KEY_f1=touchpad_on                            # Fn+F7 Touchpad toggle (off-to-on)
+ KEYBOARD_KEY_f2=touchpad_off                           # Fn+F7 Touchpad toggle (on-to-off)
+ KEYBOARD_KEY_f3=prog2                                  # "P2" programmable button
+ KEYBOARD_KEY_f4=prog1                                  # "P1" programmable button
+ KEYBOARD_KEY_f5=prog1                                  # tecla PredatorSense
+ KEYBOARD_KEY_f6=power                                  # Power button
+ KEYBOARD_KEY_f8=fn
+ KEYBOARD_KEY_f9=prog1                                  # Launch NTI shadow

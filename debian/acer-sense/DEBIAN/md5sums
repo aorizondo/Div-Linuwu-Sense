@@ -1,5 +1,5 @@
-2654b29a08ef5fa5c22d4405eeb90aa5  usr/lib/udev/hwdb.d/61-acer-sense-key.hwdb
-2a03c554c20d892ea433aceb85566f7f  usr/share/acer-sense/acer-sense
+39d31186ff3e41297e3cf73c39e77589  usr/lib/udev/hwdb.d/61-acer-sense-key.hwdb
+1592f6141dee4b2958776dfaa8017de8  usr/share/acer-sense/acer-sense
 dc8e4341ee9eea54627ada6cea1c03ab  usr/share/acer-sense/hardware.py
 252c9dcd6cecd707b7bcc438f86c465d  usr/share/acer-sense/widgets.py
 11aadb6094f27f1d40f7e417251853aa  usr/share/applications/acer-sense.desktop

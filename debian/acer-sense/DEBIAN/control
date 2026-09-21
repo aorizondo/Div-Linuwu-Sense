@@ -3,7 +3,7 @@ Source: linuwu-sense
 Version: 1.0.0
 Architecture: all
 Maintainer: Antonio Orizondo Leyva <aorizondoleyva@gmail.com>
-Installed-Size: 86
+Installed-Size: 89
 Depends: python3:any, python3-pyqt6, acer-powersave (= 1.0.0)
 Recommends: linuwu-sense-dkms
 Section: kernel

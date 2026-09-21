@@ -102,12 +102,11 @@ class PaginaMonitor(QWidget):
         raiz.addWidget(t)
 
         caja_temp = QGroupBox("TEMPERATURAS")
-        rej = QGridLayout(caja_temp)
+        # Los medidores se crean segun lo que el equipo publique de verdad: no
+        # todos tienen los mismos sensores (el disco mecanico solo aparece con
+        # el modulo drivetemp, y la GPU dedicada solo cuando esta encendida).
+        self.rej_temp = QGridLayout(caja_temp)
         self.medidores = {}
-        for col, nombre in enumerate(("CPU", "GPU", "Sistema", "SSD")):
-            m = Medidor(nombre)
-            self.medidores[nombre] = m
-            rej.addWidget(m, 0, col)
         raiz.addWidget(caja_temp)
 
         caja = QGroupBox("VENTILADORES Y ENERGIA")
@@ -129,8 +128,17 @@ class PaginaMonitor(QWidget):
 
     def refrescar(self):
         temps = hw.temperaturas()
+        for nombre, valor in temps.items():
+            if nombre not in self.medidores:
+                m = Medidor(nombre)
+                self.medidores[nombre] = m
+                self.rej_temp.addWidget(m, 0, len(self.medidores) - 1)
+            self.medidores[nombre].set_valor(valor)
+        # Un sensor que desaparece (la GPU al apagarse) se marca sin dato en
+        # lugar de quedarse con la ultima lectura, que enganaria.
         for nombre, m in self.medidores.items():
-            m.set_valor(temps.get(nombre))
+            if nombre not in temps:
+                m.set_valor(None)
         rpm = hw.ventiladores_rpm()
         self.lbl_fan.setText("   ".join(f"{v} rpm" for v in rpm) if rpm
                              else "sin lectura")
