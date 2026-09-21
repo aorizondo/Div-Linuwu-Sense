@@ -83,7 +83,9 @@ def temperaturas():
 
     acer = _hwmon("acer")
     if acer:
-        # temp1/temp2 del EC: en los Predator suelen ser CPU y GPU
+        # temp1/temp2 del EC: en los Predator suelen ser sistema y GPU.
+        # El EC devuelve 0 para la GPU mientras esta suspendida en D3cold: no
+        # es un fallo de lectura, es que no hay nada encendido que medir.
         for idx, etiqueta in ((1, "Sistema"), (2, "GPU")):
             v = _leer(acer / f"temp{idx}_input")
             if v and int(v) > 0:
@@ -118,7 +120,14 @@ def ventiladores_rpm():
 
 
 def consumo_mw():
-    """No hay power_now en este equipo: se calcula. Cero si esta enchufado."""
+    """Consumo del sistema en mW, o None si no es medible.
+
+    No hay power_now en este equipo, asi que se calcula de current_now por
+    voltage_now. Pero eso SOLO vale descargando: mientras carga, current_now es
+    la corriente que ENTRA en la bateria, y darla por consumo es enganoso --
+    llegaba a mostrar 21 W cuando el sistema consumia la mitad."""
+    if _leer(BAT / "status") != "Discharging":
+        return None
     i, v = _leer(BAT / "current_now"), _leer(BAT / "voltage_now")
     if not i or not v:
         return None

@@ -134,19 +134,27 @@ class PaginaMonitor(QWidget):
                 self.medidores[nombre] = m
                 self.rej_temp.addWidget(m, 0, len(self.medidores) - 1)
             self.medidores[nombre].set_valor(valor)
-        # Un sensor que desaparece (la GPU al apagarse) se marca sin dato en
-        # lugar de quedarse con la ultima lectura, que enganaria.
+        # Un sensor que desaparece se marca sin dato en lugar de quedarse con la
+        # ultima lectura, que enganaria. La GPU es el caso habitual: el EC no
+        # puede medirla mientras esta suspendida en D3cold.
         for nombre, m in self.medidores.items():
             if nombre not in temps:
                 m.set_valor(None)
+        if "GPU" not in temps and "GPU" not in self.medidores:
+            m = Medidor("GPU suspendida")
+            self.medidores["GPU"] = m
+            self.rej_temp.addWidget(m, 0, len(self.medidores) - 1)
         rpm = hw.ventiladores_rpm()
         self.lbl_fan.setText("   ".join(f"{v} rpm" for v in rpm) if rpm
                              else "sin lectura")
         b = hw.bateria()
         self.lbl_bateria.setText(f"{b['capacidad']} %   {b['estado']}")
         c = b["consumo_mw"]
-        self.lbl_consumo.setText(f"{c} mW" if c else
-                                 "no medible (conectado a la red)")
+        # Solo hay cifra fiable descargando: cargando, la corriente de la
+        # bateria es la de carga, no la del sistema.
+        self.lbl_consumo.setText(
+            f"{c} mW" if c is not None
+            else f"no medible mientras {b['estado'].lower()}")
         i = hw.cpu_info()
         self.lbl_cpu.setText(f"{i['mhz'] or '--'} MHz   gov {i['governor']}   "
                              f"EPP {i['epp'] or 'n/d'}   turbo {i['turbo']}")
