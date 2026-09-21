@@ -14,3 +14,10 @@ Keywords=acer;predator;nitro;fan;rgb;battery;power;
 Keywords[es]=acer;predator;nitro;ventilador;rgb;bateria;energia;
 StartupNotify=true
 StartupWMClass=acer-sense
+# Atajo de la tecla dedicada del portatil. El scancode 0xf5 se remapea a
+# KEY_PROG1 (148) via hwdb, que en X11 es el keycode 156 -> XF86Launch1, y KDE
+# lo presenta como "Launch (1)".
+#
+# Plasma 6 lee X-KDE-Shortcuts de los .desktop en applications/; el directorio
+# ~/.local/share/kglobalaccel/ era de Plasma 5 y ya no se consulta.
+X-KDE-Shortcuts=Launch (1)

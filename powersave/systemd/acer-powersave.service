@@ -2,7 +2,14 @@
 Description=Ajustes de energia Acer segun el perfil de power-profiles-daemon
 Documentation=https://github.com/aorizondo/Div-Linuwu-Sense
 After=dbus.service power-profiles-daemon.service
-Wants=power-profiles-daemon.service
+# Sin Wants= a proposito: junto con After= formaba un ciclo de ordenacion que
+# systemd rompia descartando el job de arranque, de modo que el servicio no
+# llegaba a ejecutarse nunca ("Job acer-powersave.service/stop deleted to break
+# ordering cycle starting with power-profiles-daemon.service/stop").
+#
+# No hace falta: si PPD no esta, el daemon lo detecta (usa DO_NOT_AUTO_START)
+# y sale limpiamente.
+#
 # Sin PartOf: interesa seguir vivo aunque PPD se reinicie.
 
 [Service]

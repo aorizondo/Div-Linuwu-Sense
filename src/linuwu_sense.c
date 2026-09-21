@@ -4316,8 +4316,26 @@ static ssize_t four_zoned_rgb_kb_store(struct device *dev, struct device_attribu
         return -ENODEV;
     }
 
-    /* Set per_zone to 0 */
+    /*
+     * Volcar lo que se acaba de aplicar en la cache de estado.
+     *
+     * Hasta ahora aqui solo se tocaba per_zone, de modo que .mode se quedaba
+     * con el valor cargado del fichero al hacer probe -o con ceros si el
+     * fichero no existia- durante toda la vida del modulo. Como
+     * set_per_zone_color() usa "current_kb_state.mode ? mode : 1" para no
+     * apagar el teclado, el efecto era que cada cambio de color por zona
+     * reprogramaba el motor con Respiracion (el fallback 1), que animaba el
+     * teclado y barria los colores estaticos recien escritos. De ahi que el
+     * color pareciera funcionar de forma intermitente.
+     */
     current_kb_state.per_zone = 0;
+    current_kb_state.mode = mode;
+    current_kb_state.speed = speed;
+    current_kb_state.brightness = brightness;
+    current_kb_state.direction = direction;
+    current_kb_state.red = red;
+    current_kb_state.green = green;
+    current_kb_state.blue = blue;
 
     return count;
 }
@@ -4657,7 +4675,15 @@ static int acer_platform_probe(struct platform_device *device)
         err = sysfs_create_group(&device->dev.kobj, &four_zoned_kb_attr_group);
         if (err)
             goto error_four_zone;
-        four_zone_kb_state_load();
+        /*
+         * Si no hay estado guardado -primera instalacion, o /etc borrado- la
+         * cache se queda a ceros y .mode vale 0, que no corresponde a nada
+         * real. Leerlo del firmware deja current_kb_state coherente con lo que
+         * el teclado esta haciendo de verdad, que es lo que espera
+         * set_per_zone_color() cuando reprograma el motor de efectos.
+         */
+        if (four_zone_kb_state_load() != 0)
+            four_zone_kb_state_update();
      }
 
     return 0;

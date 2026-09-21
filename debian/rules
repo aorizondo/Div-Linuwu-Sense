@@ -18,6 +18,13 @@ override_dh_dkms:
 
 # Las unidades cuyo nombre no coincide con el del paquete necesitan --name
 # explicito, o debhelper las ignora.
+# Las unidades viven en powersave/systemd/ y se copian al nombre que espera
+# debhelper. Tenerlas duplicadas en debian/ hacia que editar una y empaquetar
+# la otra pasara desapercibido.
+execute_before_dh_installsystemd:
+	cp powersave/systemd/acer-powersave.service debian/acer-powersave.service
+	cp powersave/systemd/acer-powersave-session.service debian/acer-powersave.user.service
+
 override_dh_installsystemd:
 	dh_installsystemd -plinuwu-sense-dkms --name=linuwu-sense
 	dh_installsystemd -pacer-powersave

@@ -4,3 +4,5 @@ powersave/profiles.conf           etc/acer-powersave/
 powersave/grub/50-acer-powersave.cfg  etc/default/grub.d/
 powersave/polkit/org.acerpowersave.policy  usr/share/polkit-1/actions/
 powersave/udev/62-nvidia-rtd3.rules  usr/lib/udev/rules.d/
+powersave/modprobe/zz-nvidia-debian.conf  etc/modprobe.d/
+powersave/xorg/61-acer-sense-no-nvidia.conf  etc/X11/xorg.conf.d/

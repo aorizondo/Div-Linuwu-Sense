@@ -230,26 +230,43 @@ def aplicar(perfil, cfg):
     # scaling_max_freq. Escribirlo nosotros seria pelearnos con el por el mismo
     # fichero, y gana quien escriba el ultimo. En modo activo PPD usa el EPP y
     # deja la frecuencia en paz, asi que ahi si conviene normalizarla.
+    # La frecuencia la gestiona PPD en los dos modos: recortando scaling_max_freq
+    # en passive, y via EPP en activo. Escribirla sin motivo es pelearse con el
+    # por el mismo fichero, y ademas intel_pstate devuelve EBUSY en varias CPUs
+    # cuando el governor esta en "performance".
+    #
+    # La unica situacion que justifica intervenir es encontrarla CLAVADA
+    # (min == max), senal inequivoca de que otra herramienta la fijo a mano --el
+    # caso tipico era el RunScript de PowerDevil con "cpupower --min 800
+    # --max 800"-- porque ese estado sobrevive indefinidamente y deja al EPP sin
+    # margen. Fuera de ese caso no se toca.
     pstate_mode = read_first(PSTATE / "status")
-    if pstate_mode == "passive":
-        log("  frecuencia: la gestiona PPD (intel_pstate en modo passive)")
-    elif s.get("frecuencia", "auto").strip() == "auto":
-        hw_min = read_first(CPU / "cpu0/cpufreq/cpuinfo_min_freq")
-        hw_max = read_first(CPU / "cpu0/cpufreq/cpuinfo_max_freq")
-        if hw_min and hw_max:
-            # max antes que min: al reves el kernel rechaza min > max.
-            n1 = write_all("cpu*/cpufreq/scaling_max_freq", hw_max)
-            n2 = write_all("cpu*/cpufreq/scaling_min_freq", hw_min)
-            log(f"  frecuencia -> {hw_min}-{hw_max} kHz ({n1}/{n2} cpus)")
-        else:
-            log(f"  frecuencia: rango ilegible (min={hw_min!r} max={hw_max!r})")
+    cur_min = read_first(CPU / "cpu0/cpufreq/scaling_min_freq")
+    cur_max = read_first(CPU / "cpu0/cpufreq/scaling_max_freq")
+    hw_min = read_first(CPU / "cpu0/cpufreq/cpuinfo_min_freq")
+    hw_max = read_first(CPU / "cpu0/cpufreq/cpuinfo_max_freq")
 
-    gov = s.get("governor", "").strip()
-    if gov:
-        write_all("cpu*/cpufreq/scaling_governor", gov)
-    epp = s.get("epp", "").strip()
-    if epp:
-        write_all("cpu*/cpufreq/energy_performance_preference", epp)
+    if cur_min and cur_max and cur_min == cur_max and hw_min and hw_max:
+        log(f"  frecuencia clavada en {cur_min} kHz, liberando a {hw_min}-{hw_max}")
+        write_all("cpu*/cpufreq/scaling_max_freq", hw_max)
+        write_all("cpu*/cpufreq/scaling_min_freq", hw_min)
+
+    # En modo ACTIVO, PPD implementa sus perfiles justamente con el governor y
+    # el EPP, asi que tocarlos aqui es pelearse con el por el mismo fichero.
+    # Ademas intel_pstate bloquea el EPP (EBUSY) cuando el governor esta en
+    # "performance", que es lo que PPD pone para su perfil de rendimiento.
+    #
+    # En modo passive ocurre al reves: el EPP no existe como palanca real y
+    # manda el governor, que ahi si conviene fijar.
+    if pstate_mode == "active":
+        log("  cpu: governor y EPP los gestiona PPD (intel_pstate activo)")
+    else:
+        gov = s.get("governor", "").strip()
+        if gov:
+            write_all("cpu*/cpufreq/scaling_governor", gov)
+        epp = s.get("epp", "").strip()
+        if epp:
+            write_all("cpu*/cpufreq/energy_performance_preference", epp)
 
     # --- dGPU ------------------------------------------------------------
     gpu = s.get("dgpu", "").strip()
