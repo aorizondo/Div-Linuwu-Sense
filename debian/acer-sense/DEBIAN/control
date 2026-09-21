@@ -1,0 +1,28 @@
+Package: acer-sense
+Source: linuwu-sense
+Version: 1.0.0
+Architecture: all
+Maintainer: Antonio Orizondo Leyva <aorizondoleyva@gmail.com>
+Installed-Size: 86
+Depends: python3:any, python3-pyqt6, acer-powersave (= 1.0.0)
+Recommends: linuwu-sense-dkms
+Section: kernel
+Priority: optional
+Homepage: https://github.com/aorizondo/Div-Linuwu-Sense
+Description: panel de control grafico para portatiles Acer Predator y Nitro
+ Interfaz grafica equivalente a PredatorSense, construida sobre el driver
+ linuwu_sense y sobre power-profiles-daemon.
+ .
+ Incluye:
+  * monitorizacion en vivo de temperaturas, revoluciones de los ventiladores,
+    consumo y estado de la CPU;
+  * control de ventiladores automatico, manual o por curva editable, con la
+    temperatura a la que empiezan a girar y como escalan;
+  * retroiluminacion del teclado: efectos, brillo, color y color fijo por cada
+    una de las cuatro zonas;
+  * perfiles de energia, tasa de refresco del panel y encendido y apagado en
+    caliente de la GPU NVIDIA;
+  * limite de carga de la bateria, calibracion y ajustes del firmware.
+ .
+ Se abre con la tecla dedicada del portatil (PredatorSense en los Predator, la
+ tecla N en los Nitro), que el paquete deja configurada.

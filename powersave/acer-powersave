@@ -137,12 +137,21 @@ def gpu_on():
     write_sysfs(f"/sys/bus/pci/devices/{NVIDIA_ROOT_PORT}/power/control", "on")
     # Reescanear el bridge, no el bus entero: menos efectos colaterales.
     write_sysfs(f"/sys/bus/pci/devices/{NVIDIA_ROOT_PORT}/rescan", "1")
-    # Sin esta espera la GPU no ha terminado de aparecer tras salir de D3cold.
-    time.sleep(3)
+
+    # Salir de D3cold y reenumerar tarda, y cuanto tarda depende del equipo:
+    # una espera fija se queda corta y hace reportar un fallo que no existe.
+    # Se sondea hasta 20 s y se sale en cuanto aparece.
+    espera = 0.0
+    while espera < 20.0:
+        if gpu_present():
+            break
+        time.sleep(0.5)
+        espera += 0.5
 
     if not gpu_present():
-        log("  dGPU: el rescan no la encontro")
+        log(f"  dGPU: no aparecio en el bus tras {espera:.0f} s de espera")
         return False
+    log(f"  dGPU: presente en el bus tras {espera:.1f} s")
 
     for name in ("nvidia-current", "nvidia"):
         r = subprocess.run(["modprobe", name], capture_output=True, text=True)
@@ -444,6 +453,30 @@ def cmd_fan(args):
     return 0
 
 
+def cmd_guardar_curva(args):
+    """Escribe la curva en la configuracion. Lo invoca la interfaz por pkexec."""
+    if os.geteuid() != 0:
+        print("guardar-curva requiere root")
+        return 1
+    import configparser
+    cp = configparser.ConfigParser()
+    cp.read(CONFIG)
+    if not cp.has_section("ventiladores"):
+        cp.add_section("ventiladores")
+    cp.set("ventiladores", "temp_minima", str(args.temp_minima))
+    cp.set("ventiladores", "curva", args.curva)
+    try:
+        os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
+        with open(CONFIG, "w") as f:
+            cp.write(f)
+    except OSError as e:
+        print(f"no se pudo escribir {CONFIG}: {e}")
+        return 1
+    print(f"curva guardada: parados por debajo de {args.temp_minima} C, "
+          f"escalado {args.curva}")
+    return 0
+
+
 def main():
     import argparse
     ap = argparse.ArgumentParser(
@@ -458,10 +491,15 @@ def main():
     g = sub.add_parser("gpu", help="encender o apagar la dGPU en caliente")
     g.add_argument("estado", choices=["on", "off"])
     sub.add_parser("fan", help="aplicar la curva de ventiladores")
+    gc = sub.add_parser("guardar-curva",
+                        help="escribir la curva en la configuracion")
+    gc.add_argument("temp_minima", type=int)
+    gc.add_argument("curva", help="pares temperatura:porcentaje separados por comas")
 
     args = ap.parse_args()
     return {"daemon": cmd_daemon, "status": cmd_status, "medir": cmd_medir,
-            "gpu": cmd_gpu, "fan": cmd_fan}[args.cmd](args)
+            "gpu": cmd_gpu, "fan": cmd_fan,
+            "guardar-curva": cmd_guardar_curva}[args.cmd](args)
 
 
 if __name__ == "__main__":

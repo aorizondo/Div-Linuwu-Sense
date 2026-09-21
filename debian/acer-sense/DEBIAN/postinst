@@ -1,0 +1,73 @@
+#!/bin/sh
+set -e
+
+# Vincula la tecla dedicada del portatil con la aplicacion, sin que el usuario
+# tenga que configurar nada a mano.
+#
+# La tecla emite el scancode 0xf5 y el kernel lo entrega como keycode 425, que
+# no tiene nombre simbolico en input-event-codes.h: los entornos de escritorio
+# no pueden ofrecerlo para asignarle un atajo. La regla hwdb que instala este
+# paquete lo remapea a KEY_PROG1 (148), que si es asignable.
+
+configurar_atajo_kde() {
+    usuario="$1"
+    hogar="$(getent passwd "$usuario" | cut -d: -f6)"
+    [ -n "$hogar" ] && [ -d "$hogar" ] || return 0
+
+    conf="$hogar/.config/kglobalshortcutsrc"
+    # No pisar un atajo que el usuario ya haya puesto.
+    if [ -f "$conf" ] && grep -q "acer-sense" "$conf" 2>/dev/null; then
+        return 0
+    fi
+
+    # kglobalaccel toma los atajos de servicio de los .desktop en
+    # ~/.local/share/kglobalaccel/, que es la via soportada en Plasma 6 para
+    # que un paquete proponga uno.
+    destino="$hogar/.local/share/kglobalaccel"
+    # Se crea y se escribe como el propio usuario: un chown recursivo sobre su
+    # directorio seria peligroso si alguna ruta fuese un enlace simbolico.
+    runuser -u "$usuario" -- mkdir -p "$destino" 2>/dev/null || return 0
+    runuser -u "$usuario" -- tee "$destino/acer-sense.desktop" >/dev/null <<'DESKTOP'
+[Desktop Entry]
+Type=Application
+Name=Acer Sense
+Exec=acer-sense
+Icon=acer-sense
+X-KDE-Shortcuts=Launch (A)
+NoDisplay=true
+DESKTOP
+    echo "acer-sense: la tecla del portatil abrira Acer Sense en la proxima sesion."
+}
+
+case "$1" in
+    configure)
+        # La regla hwdb solo surte efecto tras reconstruir el indice binario.
+        if command -v systemd-hwdb >/dev/null; then
+            systemd-hwdb update || true
+            # Reactivar el teclado para que tome el remapeo sin reiniciar.
+            udevadm trigger --subsystem-match=input --action=change 2>/dev/null || true
+        fi
+
+        usuario=""
+        if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]; then
+            usuario="$SUDO_USER"
+        elif [ -n "${PKEXEC_UID:-}" ]; then
+            usuario="$(getent passwd "$PKEXEC_UID" | cut -d: -f1)"
+        fi
+        [ -n "$usuario" ] && configurar_atajo_kde "$usuario"
+        ;;
+esac
+
+
+# Automatically added by dh_python3
+if command -v py3compile >/dev/null 2>&1; then
+	py3compile -p acer-sense /usr/share/acer-sense
+fi
+if command -v pypy3compile >/dev/null 2>&1; then
+	pypy3compile -p acer-sense /usr/share/acer-sense || true
+fi
+
+# End automatically added section
+
+
+exit 0

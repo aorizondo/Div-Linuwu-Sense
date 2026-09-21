@@ -1,0 +1,50 @@
+.TH ACER\-SENSE 1 "2026-09-20" "1.0.0" "Manual del usuario"
+.SH NOMBRE
+acer\-sense \- panel de control para portatiles Acer Predator y Nitro
+.SH SINOPSIS
+.B acer\-sense
+.SH DESCRIPCION
+Interfaz grafica equivalente a PredatorSense, construida sobre el driver
+linuwu_sense y sobre
+.BR power\-profiles\-daemon (8).
+.PP
+Se abre con la tecla dedicada del portatil, que el paquete deja configurada
+durante la instalacion, o desde el menu de aplicaciones.
+.SH SECCIONES
+.TP
+.B Monitorizacion
+Temperaturas de CPU, GPU, sistema y NVMe, revoluciones de los ventiladores,
+estado de la bateria, consumo y frecuencia de la CPU.
+.TP
+.B Ventiladores
+Modo automatico del controlador embebido, velocidad manual por porcentaje con
+lectura de revoluciones, o curva editable: se arrastran los puntos para fijar
+desde que temperatura empiezan a girar y como escalan.
+.TP
+.B Teclado
+Efectos, brillo, velocidad y color de la retroiluminacion, y color fijo para
+cada una de las cuatro zonas.
+.TP
+.B Energia
+Perfil de energia del sistema, tasa de refresco del panel y encendido y apagado
+en caliente de la GPU NVIDIA.
+.TP
+.B Bateria y sistema
+Limite de carga al 80 %, calibracion, carga USB con el equipo apagado, LCD
+override y animacion de arranque.
+.SH LIMITACIONES
+El firmware no expone ajuste fino de frecuencias ni voltajes: lo que Acer llama
+overclocking es el modo Turbo, que solo admite dos estados y se activa con el
+boton fisico del portatil.
+.PP
+El tope de carga de la bateria esta fijado en el 80 % por el firmware y no
+admite otro valor.
+.SH PERMISOS
+Los ajustes del driver requieren pertenecer al grupo
+.BR linuwu_sense ,
+al que el paquete anade al usuario que instala. Hay que volver a iniciar sesion
+para que surta efecto.
+.SH VEASE TAMBIEN
+.BR acer\-powersave (1)
+.SH AUTOR
+Antonio Orizondo Leyva

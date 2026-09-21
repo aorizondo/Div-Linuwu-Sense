@@ -1,0 +1,56 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: Div-Linuwu-Sense
+Upstream-Contact: https://github.com/PXDiv/Div-Linuwu-Sense
+Source: https://github.com/aorizondo/Div-Linuwu-Sense
+Comment:
+ El driver deriva de acer-wmi, incluido en el kernel Linux. El fichero fuente
+ declara MODULE_LICENSE("GPL"), que el kernel interpreta como GPL-2 o
+ posterior; el repositorio upstream se distribuye ademas bajo GPL-3. Los
+ ficheros del modulo se documentan aqui como GPL-2+ por su procedencia del
+ kernel, y el resto del arbol como GPL-3+.
+
+Files: src/*
+Copyright:
+ 2007-2009 Carlos Corbacho <carlos@strangeworlds.co.uk>
+ 2007-2009 E.M. Smith
+ 2024-2026 0x7375646F (proyecto Linuwu-Sense)
+ 2025-2026 Div Sharp (fork Div-Linuwu-Sense)
+License: GPL-2+
+
+Files: powersave/* debian/*
+Copyright: 2026 Antonio Orizondo Leyva <aorizondoleyva@gmail.com>
+License: GPL-3+
+
+Files: *
+Copyright:
+ 2024-2026 0x7375646F
+ 2025-2026 Div Sharp
+License: GPL-3+
+
+License: GPL-2+
+ This program is free software; you can redistribute it and/or modify it
+ under the terms of the GNU General Public License as published by the Free
+ Software Foundation; either version 2 of the License, or (at your option)
+ any later version.
+ .
+ This program is distributed in the hope that it will be useful, but WITHOUT
+ ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
+ more details.
+ .
+ On Debian systems, the complete text of the GNU General Public License
+ version 2 can be found in "/usr/share/common-licenses/GPL-2".
+
+License: GPL-3+
+ This program is free software: you can redistribute it and/or modify it
+ under the terms of the GNU General Public License as published by the Free
+ Software Foundation, either version 3 of the License, or (at your option)
+ any later version.
+ .
+ This program is distributed in the hope that it will be useful, but WITHOUT
+ ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
+ more details.
+ .
+ On Debian systems, the complete text of the GNU General Public License
+ version 3 can be found in "/usr/share/common-licenses/GPL-3".

@@ -1,0 +1,41 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+        # Los atributos sysfs del driver pertenecen al grupo linuwu_sense (lo
+        # crea sysusers y los permisos los fija tmpfiles). Sin pertenecer al
+        # grupo hay que usar sudo para cada ajuste, asi que se anade al usuario
+        # que esta instalando: es quien va a usar el equipo.
+        #
+        # SUDO_USER lo pone sudo; PKEXEC_UID lo pone pkexec (instalaciones
+        # graficas desde Discover o GDebi).
+        usuario=""
+        if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]; then
+            usuario="$SUDO_USER"
+        elif [ -n "${PKEXEC_UID:-}" ]; then
+            usuario="$(getent passwd "$PKEXEC_UID" | cut -d: -f1)"
+        fi
+
+        if [ -n "$usuario" ] && getent group linuwu_sense >/dev/null; then
+            if id -nG "$usuario" 2>/dev/null | tr ' ' '\n' | grep -qx linuwu_sense; then
+                :
+            else
+                adduser "$usuario" linuwu_sense >/dev/null 2>&1 || \
+                    usermod -aG linuwu_sense "$usuario" || true
+                echo "linuwu-sense: se ha anadido '$usuario' al grupo linuwu_sense."
+                echo "linuwu-sense: cierra la sesion y vuelve a entrar para que surta efecto."
+            fi
+        fi
+
+        # tmpfiles corre en el arranque, antes de que exista el modulo. Si el
+        # modulo ya esta cargado, aplicar los permisos ahora.
+        if [ -d /sys/module/linuwu_sense ] && command -v systemd-tmpfiles >/dev/null; then
+            systemd-tmpfiles --create /usr/lib/tmpfiles.d/linuwu-sense.conf || true
+        fi
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

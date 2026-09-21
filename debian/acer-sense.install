@@ -1,0 +1,6 @@
+powersave/gui/acer-sense              usr/share/acer-sense/
+powersave/gui/hardware.py             usr/share/acer-sense/
+powersave/gui/widgets.py              usr/share/acer-sense/
+powersave/desktop/acer-sense.desktop  usr/share/applications/
+powersave/desktop/acer-sense.svg      usr/share/icons/hicolor/scalable/apps/
+powersave/udev/61-acer-sense-key.hwdb usr/lib/udev/hwdb.d/

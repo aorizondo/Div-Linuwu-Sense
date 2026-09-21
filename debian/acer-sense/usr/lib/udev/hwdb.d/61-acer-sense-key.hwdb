@@ -1,0 +1,9 @@
+# La tecla dedicada de los Acer gaming (PredatorSense en los Predator, la tecla
+# N en los Nitro) emite el scancode 0xf5. El kernel lo entrega como keycode 425,
+# que no tiene nombre simbolico en input-event-codes.h, de modo que los entornos
+# de escritorio no pueden ofrecerlo para asignarle un atajo.
+#
+# Remapearlo a prog1 (keycode 148, KEY_PROG1) lo vuelve asignable desde
+# Preferencias del sistema. Verificado en un Predator PH315-53.
+evdev:atkbd:dmi:bvn*:bvr*:bd*:svnAcer*:pn*:*
+ KEYBOARD_KEY_f5=prog1

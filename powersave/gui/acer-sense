@@ -1,0 +1,762 @@
+#!/usr/bin/python3
+# -*- coding: utf-8 -*-
+"""
+Acer Sense - panel de control para portatiles Acer Predator y Nitro.
+
+Replica lo que ofrece PredatorSense en Windows dentro de lo que el hardware
+expone en Linux (monitorizacion, ventiladores, retroiluminacion, bateria) y
+anade la gestion de energia construida sobre power-profiles-daemon.
+
+Lo que no se puede ofrecer, y conviene saber:
+  * overclocking de CPU/GPU: el firmware no lo expone por WMI
+  * macros y Game Sync: son funciones de la aplicacion de Windows, sin
+    contrapartida en el driver
+"""
+
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QColor, QIcon
+from PyQt6.QtWidgets import (QApplication, QButtonGroup, QCheckBox,
+                             QColorDialog, QComboBox, QFrame, QGridLayout,
+                             QGroupBox, QHBoxLayout, QLabel, QMainWindow,
+                             QMessageBox, QPushButton, QSlider, QStackedWidget,
+                             QVBoxLayout, QWidget)
+
+import hardware as hw
+from widgets import ACENTO, EditorCurva, FONDO, Medidor, SUPERFICIE, TINTA, TINTA_SUAVE
+
+HOJA_ESTILO = f"""
+QWidget {{ background: {FONDO.name()}; color: {TINTA.name()}; font-size: 10pt; }}
+QFrame#lateral {{ background: {SUPERFICIE.name()}; border-right: 1px solid #2a3038; }}
+QPushButton#nav {{
+    background: transparent; border: none; border-left: 3px solid transparent;
+    padding: 11px 16px; text-align: left; color: {TINTA_SUAVE.name()};
+}}
+QPushButton#nav:hover {{ background: #232931; color: {TINTA.name()}; }}
+QPushButton#nav:checked {{
+    background: #232931; border-left: 3px solid {ACENTO.name()};
+    color: {ACENTO.name()}; font-weight: 600;
+}}
+QGroupBox {{
+    border: 1px solid #2a3038; border-radius: 6px; margin-top: 14px;
+    padding-top: 10px; background: {SUPERFICIE.name()};
+}}
+QGroupBox::title {{
+    subcontrol-origin: margin; left: 12px; padding: 0 6px;
+    color: {TINTA_SUAVE.name()}; font-size: 8.5pt; letter-spacing: 1px;
+}}
+QPushButton {{
+    background: #262d35; border: 1px solid #333c46; border-radius: 4px;
+    padding: 7px 14px;
+}}
+QPushButton:hover {{ border-color: {ACENTO.name()}; }}
+QPushButton:checked {{
+    background: {ACENTO.name()}; color: #06141a;
+    border-color: {ACENTO.name()}; font-weight: 600;
+}}
+QPushButton:disabled {{ color: #4d5763; border-color: #2a3038; }}
+QComboBox {{
+    background: #262d35; border: 1px solid #333c46; border-radius: 4px;
+    padding: 6px 10px;
+}}
+QSlider::groove:horizontal {{ height: 4px; background: #333c46; border-radius: 2px; }}
+QSlider::handle:horizontal {{
+    background: {ACENTO.name()}; width: 14px; height: 14px;
+    margin: -6px 0; border-radius: 7px;
+}}
+QSlider::sub-page:horizontal {{ background: {ACENTO.name()}; border-radius: 2px; }}
+QLabel#titulo {{ font-size: 15pt; font-weight: 600; }}
+QLabel#pista {{ color: {TINTA_SUAVE.name()}; font-size: 9pt; }}
+QLabel#dato {{ font-family: monospace; color: {ACENTO.name()}; }}
+"""
+
+
+def fila(etiqueta, widget, pista=None):
+    caja = QVBoxLayout()
+    linea = QHBoxLayout()
+    lbl = QLabel(etiqueta)
+    lbl.setMinimumWidth(170)
+    linea.addWidget(lbl)
+    linea.addWidget(widget, 1)
+    caja.addLayout(linea)
+    if pista:
+        p = QLabel(pista)
+        p.setObjectName("pista")
+        p.setWordWrap(True)
+        caja.addWidget(p)
+    return caja
+
+
+class PaginaMonitor(QWidget):
+    def __init__(self):
+        super().__init__()
+        raiz = QVBoxLayout(self)
+        raiz.setContentsMargins(22, 18, 22, 18)
+        raiz.setSpacing(14)
+        t = QLabel("Monitorizacion")
+        t.setObjectName("titulo")
+        raiz.addWidget(t)
+
+        caja_temp = QGroupBox("TEMPERATURAS")
+        rej = QGridLayout(caja_temp)
+        self.medidores = {}
+        for col, nombre in enumerate(("CPU", "GPU", "Sistema", "SSD")):
+            m = Medidor(nombre)
+            self.medidores[nombre] = m
+            rej.addWidget(m, 0, col)
+        raiz.addWidget(caja_temp)
+
+        caja = QGroupBox("VENTILADORES Y ENERGIA")
+        rej2 = QGridLayout(caja)
+        self.lbl_fan = QLabel("--")
+        self.lbl_bateria = QLabel("--")
+        self.lbl_consumo = QLabel("--")
+        self.lbl_cpu = QLabel("--")
+        for r, (et, w) in enumerate((("Ventiladores", self.lbl_fan),
+                                     ("Bateria", self.lbl_bateria),
+                                     ("Consumo", self.lbl_consumo),
+                                     ("CPU", self.lbl_cpu))):
+            w.setObjectName("dato")
+            rej2.addWidget(QLabel(et), r, 0)
+            rej2.addWidget(w, r, 1)
+        rej2.setColumnStretch(1, 1)
+        raiz.addWidget(caja)
+        raiz.addStretch()
+
+    def refrescar(self):
+        temps = hw.temperaturas()
+        for nombre, m in self.medidores.items():
+            m.set_valor(temps.get(nombre))
+        rpm = hw.ventiladores_rpm()
+        self.lbl_fan.setText("   ".join(f"{v} rpm" for v in rpm) if rpm
+                             else "sin lectura")
+        b = hw.bateria()
+        self.lbl_bateria.setText(f"{b['capacidad']} %   {b['estado']}")
+        c = b["consumo_mw"]
+        self.lbl_consumo.setText(f"{c} mW" if c else
+                                 "no medible (conectado a la red)")
+        i = hw.cpu_info()
+        self.lbl_cpu.setText(f"{i['mhz'] or '--'} MHz   gov {i['governor']}   "
+                             f"EPP {i['epp'] or 'n/d'}   turbo {i['turbo']}")
+
+
+class PaginaVentiladores(QWidget):
+    def __init__(self):
+        super().__init__()
+        raiz = QVBoxLayout(self)
+        raiz.setContentsMargins(22, 18, 22, 18)
+        raiz.setSpacing(12)
+        t = QLabel("Ventiladores")
+        t.setObjectName("titulo")
+        raiz.addWidget(t)
+
+        caja_modo = QGroupBox("MODO")
+        vm = QVBoxLayout(caja_modo)
+        botones = QHBoxLayout()
+        self.grupo = QButtonGroup(self)
+        for i, nombre in enumerate(("Automatico (EC)", "Manual", "Curva")):
+            b = QPushButton(nombre)
+            b.setCheckable(True)
+            self.grupo.addButton(b, i)
+            botones.addWidget(b)
+        self.grupo.button(0).setChecked(True)
+        self.grupo.idClicked.connect(self._modo_cambiado)
+        vm.addLayout(botones)
+
+        self.lbl_rpm = QLabel("--")
+        self.lbl_rpm.setObjectName("dato")
+        vm.addLayout(fila("Velocidad real", self.lbl_rpm))
+        aviso = QLabel(
+            "El boton Turbo del portatil pone los ventiladores al maximo por "
+            "su cuenta, saltandose este panel: lo gestiona el driver y su "
+            "estado no se puede consultar, asi que si lo activas manda el.")
+        aviso.setObjectName("pista")
+        aviso.setWordWrap(True)
+        vm.addWidget(aviso)
+        raiz.addWidget(caja_modo)
+
+        self.caja_manual = QGroupBox("VELOCIDAD MANUAL")
+        vman = QVBoxLayout(self.caja_manual)
+        self.sl_cpu = QSlider(Qt.Orientation.Horizontal)
+        self.sl_gpu = QSlider(Qt.Orientation.Horizontal)
+        self.lb_cpu = QLabel("0 %")
+        self.lb_gpu = QLabel("0 %")
+        self.lb_rpm_cpu = QLabel("-- rpm")
+        self.lb_rpm_gpu = QLabel("-- rpm")
+        for sl, lb, rpm, et in ((self.sl_cpu, self.lb_cpu, self.lb_rpm_cpu, "CPU"),
+                                (self.sl_gpu, self.lb_gpu, self.lb_rpm_gpu, "GPU")):
+            sl.setRange(0, 100)
+            lb.setMinimumWidth(48)
+            lb.setObjectName("dato")
+            # El porcentaje es lo que se pide; las rpm son lo que el EC hace de
+            # verdad. No siempre coinciden, asi que se muestran los dos.
+            rpm.setMinimumWidth(78)
+            rpm.setObjectName("dato")
+            linea = QHBoxLayout()
+            linea.addWidget(QLabel(et))
+            linea.addWidget(sl, 1)
+            linea.addWidget(lb)
+            linea.addWidget(rpm)
+            vman.addLayout(linea)
+        self.sl_cpu.valueChanged.connect(lambda v: self.lb_cpu.setText(f"{v} %"))
+        self.sl_gpu.valueChanged.connect(lambda v: self.lb_gpu.setText(f"{v} %"))
+        self.sl_cpu.sliderReleased.connect(self._aplicar_manual)
+        self.sl_gpu.sliderReleased.connect(self._aplicar_manual)
+        raiz.addWidget(self.caja_manual)
+
+        self.caja_curva = QGroupBox(
+            "CURVA  ·  ARRASTRA LOS PUNTOS PARA FIJAR DESDE QUE TEMPERATURA "
+            "GIRAN Y COMO ESCALAN")
+        vc = QVBoxLayout(self.caja_curva)
+        self.curva = EditorCurva()
+        vc.addWidget(self.curva)
+        pie = QHBoxLayout()
+        self.lbl_curva = QLabel("--")
+        self.lbl_curva.setObjectName("dato")
+        pie.addWidget(self.lbl_curva, 1)
+        b_guardar = QPushButton("Guardar como curva del sistema")
+        b_guardar.clicked.connect(self._guardar_curva)
+        pie.addWidget(b_guardar)
+        vc.addLayout(pie)
+        raiz.addWidget(self.caja_curva, 1)
+        self._modo_cambiado(0)
+
+    def _modo_cambiado(self, idx):
+        self.caja_manual.setVisible(idx == 1)
+        self.caja_curva.setVisible(idx == 2)
+        if idx == 0:
+            ok, err = hw.fan_auto()
+            if not ok:
+                QMessageBox.warning(self, "Ventiladores", err)
+
+    def _aplicar_manual(self):
+        ok, err = hw.fan_set(self.sl_cpu.value(), self.sl_gpu.value())
+        if not ok:
+            QMessageBox.warning(self, "Ventiladores", err)
+
+    def _guardar_curva(self):
+        puntos = sorted(self.curva.puntos)
+        # El primer punto marca desde que temperatura giran: por debajo quedan
+        # parados, que es justo lo que se busca para el silencio en reposo.
+        t_min = puntos[0][0]
+        curva = ",".join(f"{t}:{p}" for t, p in puntos[1:]) or f"{t_min + 10}:30"
+        ok, err = hw.guardar_curva(t_min, curva)
+        if ok:
+            QMessageBox.information(
+                self, "Curva de ventiladores",
+                f"Guardada. Los ventiladores quedan parados por debajo de "
+                f"{t_min} °C.\n\nPara que la aplique de forma continua:\n"
+                "  sudo systemctl restart acer-powersave")
+        else:
+            QMessageBox.warning(self, "Curva de ventiladores",
+                                err or "no se pudo guardar")
+
+    def refrescar(self):
+        rpm = hw.ventiladores_rpm()
+        if rpm:
+            self.lbl_rpm.setText("   ".join(f"{v} rpm" for v in rpm))
+            self.lb_rpm_cpu.setText(f"{rpm[0]} rpm")
+            if len(rpm) > 1:
+                self.lb_rpm_gpu.setText(f"{rpm[1]} rpm")
+        else:
+            self.lbl_rpm.setText("sin lectura")
+
+        estado = hw.fan_get()
+        if estado and self.grupo.checkedId() != 1:
+            for sl, v in ((self.sl_cpu, estado[0]), (self.sl_gpu, estado[1])):
+                sl.blockSignals(True)
+                sl.setValue(v)
+                sl.blockSignals(False)
+        t = hw.temperaturas().get("CPU")
+        if t is not None:
+            self.curva.set_temp_actual(t)
+            if self.grupo.checkedId() == 2:
+                pct = self.curva.porcentaje_para(t)
+                self.lbl_curva.setText(f"a {t:.0f} °C la curva pide {pct} %")
+                hw.fan_set(pct, pct)
+
+
+class PaginaTeclado(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.color = QColor("#00c8d7")
+        raiz = QVBoxLayout(self)
+        raiz.setContentsMargins(22, 18, 22, 18)
+        raiz.setSpacing(12)
+        t = QLabel("Retroiluminacion del teclado")
+        t.setObjectName("titulo")
+        raiz.addWidget(t)
+
+        nota = QLabel(
+            "Aviso de este modelo: el primer campo que el driver llama «modo» "
+            "es en realidad el interruptor de la luz, y el valor 0 apaga el "
+            "teclado. Mientras esta apagado tampoco funcionan las teclas Fn de "
+            "brillo, porque el EC solo las atiende con la luz encendida.")
+        nota.setObjectName("pista")
+        nota.setWordWrap(True)
+        raiz.addWidget(nota)
+
+        caja = QGroupBox("EFECTO")
+        v = QVBoxLayout(caja)
+        self.cb_efecto = QComboBox()
+        for nombre, _ in hw.EFECTOS:
+            self.cb_efecto.addItem(nombre)
+        self.cb_efecto.setCurrentIndex(3)
+        v.addLayout(fila("Efecto", self.cb_efecto))
+
+        self.sl_brillo = QSlider(Qt.Orientation.Horizontal)
+        self.sl_brillo.setRange(0, 100)
+        self.sl_brillo.setValue(100)
+        self.lb_brillo = QLabel("100 %")
+        self.lb_brillo.setObjectName("dato")
+        self.lb_brillo.setMinimumWidth(48)
+        cont = QWidget()
+        lb = QHBoxLayout(cont)
+        lb.setContentsMargins(0, 0, 0, 0)
+        lb.addWidget(self.sl_brillo, 1)
+        lb.addWidget(self.lb_brillo)
+        v.addLayout(fila("Brillo", cont))
+        self.sl_brillo.valueChanged.connect(
+            lambda x: self.lb_brillo.setText(f"{x} %"))
+
+        self.sl_vel = QSlider(Qt.Orientation.Horizontal)
+        self.sl_vel.setRange(0, 9)
+        self.sl_vel.setValue(1)
+        v.addLayout(fila("Velocidad", self.sl_vel,
+                         "Solo afecta a los efectos animados."))
+
+        self.b_color = QPushButton("Elegir color")
+        self.b_color.clicked.connect(self._elegir_color)
+        v.addLayout(fila("Color", self.b_color,
+                         "Los efectos Neon y Parpadeo ignoran el color: lo "
+                         "elige el firmware."))
+
+        acciones = QHBoxLayout()
+        b_aplicar = QPushButton("Aplicar")
+        b_aplicar.clicked.connect(self._aplicar)
+        b_apagar = QPushButton("Apagar")
+        b_apagar.clicked.connect(self._apagar)
+        acciones.addWidget(b_aplicar)
+        acciones.addWidget(b_apagar)
+        acciones.addStretch()
+        v.addLayout(acciones)
+        raiz.addWidget(caja)
+
+        # --- color fijo por zona -------------------------------------------
+        # El teclado tiene cuatro zonas. Esta es ademas la unica via para un
+        # color estatico: el efecto "estatico" que numera el driver como 0 es
+        # el mismo valor que apaga la luz.
+        caja_z = QGroupBox("COLOR FIJO POR ZONA")
+        vz = QVBoxLayout(caja_z)
+        p_z = QLabel(
+            "Cuatro zonas, de izquierda a derecha. Es la unica forma de tener "
+            "un color estatico, porque el efecto «estatico» del driver comparte "
+            "valor con el apagado.")
+        p_z.setObjectName("pista")
+        p_z.setWordWrap(True)
+        vz.addWidget(p_z)
+
+        self.colores_zona = [QColor("#00c8d7") for _ in range(4)]
+        self.botones_zona = []
+        linea_z = QHBoxLayout()
+        for i in range(4):
+            b = QPushButton(f"Zona {i + 1}")
+            b.setMinimumHeight(52)
+            b.clicked.connect(lambda _, idx=i: self._elegir_zona(idx))
+            self.botones_zona.append(b)
+            linea_z.addWidget(b)
+        vz.addLayout(linea_z)
+
+        self.sl_brillo_z = QSlider(Qt.Orientation.Horizontal)
+        self.sl_brillo_z.setRange(0, 100)
+        self.sl_brillo_z.setValue(100)
+        self.lb_brillo_z = QLabel("100 %")
+        self.lb_brillo_z.setObjectName("dato")
+        self.lb_brillo_z.setMinimumWidth(48)
+        cont_z = QWidget()
+        lz = QHBoxLayout(cont_z)
+        lz.setContentsMargins(0, 0, 0, 0)
+        lz.addWidget(self.sl_brillo_z, 1)
+        lz.addWidget(self.lb_brillo_z)
+        vz.addLayout(fila("Brillo", cont_z))
+        self.sl_brillo_z.valueChanged.connect(
+            lambda x: self.lb_brillo_z.setText(f"{x} %"))
+
+        acc_z = QHBoxLayout()
+        b_apl_z = QPushButton("Aplicar colores por zona")
+        b_apl_z.clicked.connect(self._aplicar_zonas)
+        b_igual = QPushButton("Igualar las cuatro")
+        b_igual.clicked.connect(self._igualar_zonas)
+        acc_z.addWidget(b_apl_z)
+        acc_z.addWidget(b_igual)
+        acc_z.addStretch()
+        vz.addLayout(acc_z)
+        raiz.addWidget(caja_z)
+        raiz.addStretch()
+        self._pintar_boton()
+        self._pintar_zonas()
+
+    def _pintar_boton(self):
+        self.b_color.setStyleSheet(
+            f"background: {self.color.name()}; "
+            f"color: {'#000' if self.color.lightness() > 127 else '#fff'};")
+
+    def _elegir_color(self):
+        c = QColorDialog.getColor(self.color, self, "Color del teclado")
+        if c.isValid():
+            self.color = c
+            self._pintar_boton()
+
+    def _aplicar(self):
+        efecto = hw.EFECTOS[self.cb_efecto.currentIndex()][1]
+        if efecto == 0:
+            self._apagar()
+            return
+        ok, err = hw.kb_set(efecto, self.sl_vel.value(), self.sl_brillo.value(),
+                            1, (self.color.red(), self.color.green(),
+                                self.color.blue()))
+        if not ok:
+            QMessageBox.warning(self, "Teclado", err)
+
+    def _apagar(self):
+        ok, err = hw.kb_apagar()
+        if not ok:
+            QMessageBox.warning(self, "Teclado", err)
+
+    def _pintar_zonas(self):
+        for b, c in zip(self.botones_zona, self.colores_zona):
+            b.setStyleSheet(
+                f"background: {c.name()}; "
+                f"color: {'#000' if c.lightness() > 127 else '#fff'};")
+
+    def _elegir_zona(self, idx):
+        c = QColorDialog.getColor(self.colores_zona[idx], self,
+                                  f"Color de la zona {idx + 1}")
+        if c.isValid():
+            self.colores_zona[idx] = c
+            self._pintar_zonas()
+            self._aplicar_zonas()
+
+    def _igualar_zonas(self):
+        self.colores_zona = [QColor(self.colores_zona[0]) for _ in range(4)]
+        self._pintar_zonas()
+        self._aplicar_zonas()
+
+    def _aplicar_zonas(self):
+        colores = [f"{c.red():02x}{c.green():02x}{c.blue():02x}"
+                   for c in self.colores_zona]
+        ok, err = hw.kb_zonas_set(colores, self.sl_brillo_z.value())
+        if not ok:
+            QMessageBox.warning(self, "Teclado", err)
+
+    def refrescar(self):
+        est = hw.kb_get()
+        if est and not self.sl_brillo.isSliderDown():
+            self.sl_brillo.blockSignals(True)
+            self.sl_brillo.setValue(est["brillo"])
+            self.sl_brillo.blockSignals(False)
+            self.lb_brillo.setText(f"{est['brillo']} %")
+
+        zonas = hw.kb_zonas_get()
+        if zonas and not self.sl_brillo_z.isSliderDown():
+            colores, brillo = zonas
+            for i, hexa in enumerate(colores[:4]):
+                try:
+                    self.colores_zona[i] = QColor("#" + hexa)
+                except ValueError:
+                    pass
+            self._pintar_zonas()
+            self.sl_brillo_z.blockSignals(True)
+            self.sl_brillo_z.setValue(brillo)
+            self.sl_brillo_z.blockSignals(False)
+            self.lb_brillo_z.setText(f"{brillo} %")
+
+
+class PaginaEnergia(QWidget):
+    def __init__(self):
+        super().__init__()
+        raiz = QVBoxLayout(self)
+        raiz.setContentsMargins(22, 18, 22, 18)
+        raiz.setSpacing(12)
+        t = QLabel("Energia")
+        t.setObjectName("titulo")
+        raiz.addWidget(t)
+
+        caja_perf = QGroupBox("PERFIL DEL SISTEMA")
+        v = QVBoxLayout(caja_perf)
+        self.botones_perfil = QButtonGroup(self)
+        linea = QHBoxLayout()
+        for i, (clave, texto) in enumerate((("power-saver", "Ahorro"),
+                                            ("balanced", "Equilibrado"),
+                                            ("performance", "Rendimiento"))):
+            b = QPushButton(texto)
+            b.setCheckable(True)
+            b.setProperty("perfil", clave)
+            self.botones_perfil.addButton(b, i)
+            linea.addWidget(b)
+        self.botones_perfil.idClicked.connect(self._perfil)
+        v.addLayout(linea)
+        p = QLabel(
+            "Es el perfil de power-profiles-daemon, el mismo que usa el applet "
+            "de bateria de Plasma. A partir de el, el servicio acer-powersave "
+            "ajusta la tasa de refresco, el EPP y el turbo.")
+        p.setObjectName("pista")
+        p.setWordWrap(True)
+        v.addWidget(p)
+        raiz.addWidget(caja_perf)
+
+        caja_pant = QGroupBox("PANTALLA")
+        vp = QVBoxLayout(caja_pant)
+        self.cb_hz = QComboBox()
+        self.cb_hz.activated.connect(self._refresco)
+        vp.addLayout(fila("Tasa de refresco", self.cb_hz,
+                          "Medido en este equipo: pasar de 144 a 60 Hz ahorra "
+                          "unos 400 mW, el mayor ahorro individual."))
+        raiz.addWidget(caja_pant)
+
+        caja_gpu = QGroupBox("GPU DEDICADA")
+        vg = QVBoxLayout(caja_gpu)
+        self.lbl_gpu = QLabel("--")
+        self.lbl_gpu.setObjectName("dato")
+        vg.addLayout(fila("Estado", self.lbl_gpu))
+        bg = QHBoxLayout()
+        b_on = QPushButton("Encender")
+        b_on.clicked.connect(lambda: self._gpu(True))
+        b_off = QPushButton("Apagar")
+        b_off.clicked.connect(lambda: self._gpu(False))
+        bg.addWidget(b_on)
+        bg.addWidget(b_off)
+        bg.addStretch()
+        vg.addLayout(bg)
+        pg = QLabel(
+            "Se enciende y se apaga en caliente, sin reiniciar: se retira del "
+            "bus PCI y el puente cae a D3cold. El estado se lee solo por "
+            "sysfs, porque lspci y nvidia-smi despiertan la tarjeta.")
+        pg.setObjectName("pista")
+        pg.setWordWrap(True)
+        vg.addWidget(pg)
+        raiz.addWidget(caja_gpu)
+        raiz.addStretch()
+
+    def _perfil(self, idx):
+        b = self.botones_perfil.button(idx)
+        ok, err = hw.perfil_set(b.property("perfil"))
+        if not ok:
+            QMessageBox.warning(self, "Perfil", err or "no se pudo cambiar")
+
+    def _refresco(self):
+        txt = self.cb_hz.currentText().replace(" Hz", "")
+        if txt.isdigit():
+            ok, err = hw.refresco_set(int(txt))
+            if not ok:
+                QMessageBox.warning(self, "Pantalla", err)
+
+    def _gpu(self, encender):
+        ok, err = hw.gpu_set(encender)
+        if not ok:
+            QMessageBox.warning(self, "GPU", err or "no se pudo cambiar")
+
+    def refrescar(self):
+        actual = hw.perfil_actual()
+        for b in self.botones_perfil.buttons():
+            b.setChecked(b.property("perfil") == actual)
+        if self.cb_hz.count() == 0:
+            for hz in hw.refrescos_disponibles():
+                self.cb_hz.addItem(f"{hz} Hz")
+        r = hw.refresco_actual()
+        if r:
+            i = self.cb_hz.findText(f"{r[1]} Hz")
+            if i >= 0 and i != self.cb_hz.currentIndex():
+                self.cb_hz.setCurrentIndex(i)
+        self.lbl_gpu.setText(hw.gpu_estado())
+
+
+class PaginaSistema(QWidget):
+    def __init__(self):
+        super().__init__()
+        raiz = QVBoxLayout(self)
+        raiz.setContentsMargins(22, 18, 22, 18)
+        raiz.setSpacing(12)
+        t = QLabel("Bateria y sistema")
+        t.setObjectName("titulo")
+        raiz.addWidget(t)
+
+        caja_bat = QGroupBox("BATERIA")
+        v = QVBoxLayout(caja_bat)
+        self.ch_limite = QCheckBox("Limitar la carga al 80 %")
+        self.ch_limite.clicked.connect(
+            lambda c: self._attr("battery_limiter", "1" if c else "0"))
+        v.addWidget(self.ch_limite)
+        p = QLabel(
+            "El firmware solo admite este tope fijo: no se puede elegir otro "
+            "porcentaje ni detener la carga a voluntad. Verificado leyendo el "
+            "DSDT de este equipo.")
+        p.setObjectName("pista")
+        p.setWordWrap(True)
+        v.addWidget(p)
+        self.ch_calib = QCheckBox("Calibracion de bateria en curso")
+        self.ch_calib.clicked.connect(
+            lambda c: self._attr("battery_calibration", "1" if c else "0"))
+        v.addWidget(self.ch_calib)
+        p2 = QLabel(
+            "Carga al 100 %, descarga a 0 % y vuelve a cargar. Tarda horas y "
+            "no se debe desconectar el cargador durante el proceso.")
+        p2.setObjectName("pista")
+        p2.setWordWrap(True)
+        v.addWidget(p2)
+        raiz.addWidget(caja_bat)
+
+        caja_sis = QGroupBox("FIRMWARE")
+        vs = QVBoxLayout(caja_sis)
+        self.cb_usb = QComboBox()
+        for txt, val in (("Desactivado", "0"), ("Hasta el 10 %", "10"),
+                         ("Hasta el 20 %", "20"), ("Hasta el 30 %", "30")):
+            self.cb_usb.addItem(txt, val)
+        self.cb_usb.activated.connect(
+            lambda: self._attr("usb_charging", self.cb_usb.currentData()))
+        vs.addLayout(fila("Carga USB apagado", self.cb_usb,
+                          "Mantiene alimentado el puerto USB con el portatil "
+                          "apagado hasta el nivel de bateria elegido."))
+        self.ch_lcd = QCheckBox("LCD Override (reduce el ghosting)")
+        self.ch_lcd.clicked.connect(
+            lambda c: self._attr("lcd_override", "1" if c else "0"))
+        vs.addWidget(self.ch_lcd)
+        self.ch_boot = QCheckBox("Animacion y sonido de arranque")
+        self.ch_boot.clicked.connect(
+            lambda c: self._attr("boot_animation_sound", "1" if c else "0"))
+        vs.addWidget(self.ch_boot)
+        self.ch_timeout = QCheckBox(
+            "Apagar la retroiluminacion tras 30 s de inactividad")
+        self.ch_timeout.clicked.connect(
+            lambda c: self._attr("backlight_timeout", "1" if c else "0"))
+        vs.addWidget(self.ch_timeout)
+        raiz.addWidget(caja_sis)
+        raiz.addStretch()
+
+    def _attr(self, nombre, valor):
+        ok, err = hw.attr_set(nombre, valor)
+        if not ok:
+            QMessageBox.warning(self, "Ajuste", err)
+
+    def refrescar(self):
+        for chk, nombre in ((self.ch_limite, "battery_limiter"),
+                            (self.ch_calib, "battery_calibration"),
+                            (self.ch_lcd, "lcd_override"),
+                            (self.ch_boot, "boot_animation_sound"),
+                            (self.ch_timeout, "backlight_timeout")):
+            estado = hw.attr_get(nombre) == "1"
+            if chk.isChecked() != estado:
+                chk.blockSignals(True)
+                chk.setChecked(estado)
+                chk.blockSignals(False)
+        i = self.cb_usb.findData(hw.attr_get("usb_charging"))
+        if i >= 0:
+            self.cb_usb.setCurrentIndex(i)
+
+
+class Ventana(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Acer Sense")
+        self.setMinimumSize(920, 640)
+
+        central = QWidget()
+        self.setCentralWidget(central)
+        raiz = QHBoxLayout(central)
+        raiz.setContentsMargins(0, 0, 0, 0)
+        raiz.setSpacing(0)
+
+        lateral = QFrame()
+        lateral.setObjectName("lateral")
+        lateral.setFixedWidth(200)
+        vl = QVBoxLayout(lateral)
+        vl.setContentsMargins(0, 16, 0, 16)
+        vl.setSpacing(2)
+
+        marca = QLabel("  ACER SENSE")
+        marca.setStyleSheet(
+            f"color: {ACENTO.name()}; font-size: 12pt; font-weight: 700; "
+            "letter-spacing: 2px; padding: 8px 16px 18px 16px;")
+        vl.addWidget(marca)
+
+        self.pila = QStackedWidget()
+        paginas = [("Monitorizacion", PaginaMonitor()),
+                   ("Ventiladores", PaginaVentiladores()),
+                   ("Teclado", PaginaTeclado()),
+                   ("Energia", PaginaEnergia()),
+                   ("Bateria y sistema", PaginaSistema())]
+        self.grupo_nav = QButtonGroup(self)
+        for i, (nombre, pagina) in enumerate(paginas):
+            b = QPushButton(nombre)
+            b.setObjectName("nav")
+            b.setCheckable(True)
+            self.grupo_nav.addButton(b, i)
+            vl.addWidget(b)
+            self.pila.addWidget(pagina)
+        self.grupo_nav.button(0).setChecked(True)
+        self.grupo_nav.idClicked.connect(self.pila.setCurrentIndex)
+        vl.addStretch()
+
+        self.lbl_driver = QLabel()
+        self.lbl_driver.setObjectName("pista")
+        self.lbl_driver.setWordWrap(True)
+        self.lbl_driver.setStyleSheet("padding: 8px 16px;")
+        vl.addWidget(self.lbl_driver)
+
+        raiz.addWidget(lateral)
+        raiz.addWidget(self.pila, 1)
+
+        self.temporizador = QTimer(self)
+        self.temporizador.timeout.connect(self.refrescar)
+        self.temporizador.start(2000)
+        self.refrescar()
+
+    def refrescar(self):
+        if not hw.driver_presente():
+            self.lbl_driver.setText(
+                "El modulo linuwu_sense no esta cargado: la mayoria de los "
+                "controles no funcionaran.")
+        else:
+            self.lbl_driver.setText(f"driver activo · {hw.panel().name}")
+        # Solo se refresca la pagina visible: leer sysfs cuesta y algunas
+        # lecturas despiertan al firmware.
+        actual = self.pila.currentWidget()
+        if hasattr(actual, "refrescar"):
+            actual.refrescar()
+
+
+def main():
+    app = QApplication(sys.argv)
+    app.setApplicationName("Acer Sense")
+    app.setDesktopFileName("acer-sense")
+    # Sin esto Wayland pinta el icono generico en la barra de tareas.
+    icono = QIcon.fromTheme("acer-sense")
+    if icono.isNull():
+        for ruta in ("/usr/share/icons/hicolor/scalable/apps/acer-sense.svg",
+                     os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                  "acer-sense.svg")):
+            if os.path.exists(ruta):
+                icono = QIcon(ruta)
+                break
+    if not icono.isNull():
+        app.setWindowIcon(icono)
+    app.setStyleSheet(HOJA_ESTILO)
+
+    if not hw.driver_presente():
+        QMessageBox.warning(
+            None, "Acer Sense",
+            "No se encuentra el modulo linuwu_sense.\n\n"
+            "Instala el paquete linuwu-sense-dkms y reinicia, o cargalo con:\n"
+            "  sudo modprobe linuwu_sense")
+
+    v = Ventana()
+    v.show()
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()

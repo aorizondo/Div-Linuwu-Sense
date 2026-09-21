@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Name=Acer Sense
+Name[es]=Acer Sense
+GenericName=Laptop control panel
+GenericName[es]=Panel de control del portatil
+Comment=Fans, keyboard backlight, battery and power management for Acer laptops
+Comment[es]=Ventiladores, retroiluminacion, bateria y energia en portatiles Acer
+Exec=acer-sense
+Icon=acer-sense
+Terminal=false
+Categories=System;Settings;HardwareSettings;Qt;
+Keywords=acer;predator;nitro;fan;rgb;battery;power;
+Keywords[es]=acer;predator;nitro;ventilador;rgb;bateria;energia;
+StartupNotify=true
+StartupWMClass=acer-sense

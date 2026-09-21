@@ -69,3 +69,30 @@ Description: ajustes de energia para portatiles Acer Predator y Nitro
   * medicion de consumo en reposo con descarte de muestras con actividad.
  .
  No toca el brillo de la pantalla ni la retroiluminacion del teclado.
+
+Package: acer-sense
+Architecture: all
+Depends:
+ ${misc:Depends},
+ ${python3:Depends},
+ python3-pyqt6,
+ acer-powersave (= ${binary:Version}),
+Recommends:
+ linuwu-sense-dkms,
+Description: panel de control grafico para portatiles Acer Predator y Nitro
+ Interfaz grafica equivalente a PredatorSense, construida sobre el driver
+ linuwu_sense y sobre power-profiles-daemon.
+ .
+ Incluye:
+  * monitorizacion en vivo de temperaturas, revoluciones de los ventiladores,
+    consumo y estado de la CPU;
+  * control de ventiladores automatico, manual o por curva editable, con la
+    temperatura a la que empiezan a girar y como escalan;
+  * retroiluminacion del teclado: efectos, brillo, color y color fijo por cada
+    una de las cuatro zonas;
+  * perfiles de energia, tasa de refresco del panel y encendido y apagado en
+    caliente de la GPU NVIDIA;
+  * limite de carga de la bateria, calibracion y ajustes del firmware.
+ .
+ Se abre con la tecla dedicada del portatil (PredatorSense en los Predator, la
+ tecla N en los Nitro), que el paquete deja configurada.

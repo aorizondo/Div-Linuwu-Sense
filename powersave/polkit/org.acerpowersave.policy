@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1.0/policyconfig.dtd">
+<policyconfig>
+  <vendor>Div-Linuwu-Sense</vendor>
+  <vendor_url>https://github.com/aorizondo/Div-Linuwu-Sense</vendor_url>
+
+  <action id="org.acerpowersave.manage">
+    <description>Gestionar los ajustes de energia del portatil Acer</description>
+    <description xml:lang="es">Gestionar los ajustes de energia del portatil Acer</description>
+    <message>Se requiere autenticacion para cambiar los ajustes de energia</message>
+    <message xml:lang="es">Se requiere autenticacion para cambiar los ajustes de energia</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <!-- La sesion activa local solo se autentica una vez por sesion -->
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/acer-powersave</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+  </action>
+</policyconfig>
