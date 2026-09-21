@@ -14,13 +14,22 @@
 # hermanos (Predator PH315-52, Nitro AN515-58) en 60-keyboard.hwdb.
 
 evdev:atkbd:dmi:bvn*:bvr*:bd*:svnAcer*:pnPredator*PH315-53:*
-# Fn+F10 y Fn+F9: brillo del TECLADO. En el bloque generico de Acer el
-# scancode ef esta mapeado a brightnessdown (brillo de PANTALLA), que en este
-# modelo es incorrecto: el brillo de pantalla lo emite el Video Bus por ACPI
-# como keycodes 224/225, de modo que mapearlo aqui tambien crea dos emisores
-# en conflicto y deja de funcionar el del teclado.
- KEYBOARD_KEY_ef=kbdillumup
- KEYBOARD_KEY_f0=kbdillumdown
+# Fn+F10 y Fn+F9: brillo del TECLADO, que en este equipo ajusta el EC por su
+# cuenta sin pasar por el kernel.
+#
+# Se dejan SIN ACCION a proposito, igual que hace 60-keyboard.hwdb en otros
+# modelos con el comentario "also emitted by acpi-video, ignore":
+#
+#  * mapeados a brightnessdown (lo que hace el bloque generico de Acer) KDE los
+#    toma por brillo de PANTALLA, que aqui emite el Video Bus por ACPI como
+#    keycodes 224/225: dos emisores para lo mismo.
+#  * mapeados a kbdillumup/down, KDE los toma por brillo de TECLADO e intenta
+#    actuar, pero no hay ningun kbd_backlight en /sys/class/leds, de modo que
+#    compite con el EC sin poder hacer nada util.
+#
+# Con "unknown" el evento no llega al escritorio y manda solo el EC.
+ KEYBOARD_KEY_ef=unknown
+ KEYBOARD_KEY_f0=unknown
 # La tecla dedicada de PredatorSense. systemd la mapea a "presentation", un
 # nombre que ningun escritorio ofrece para asignar atajos; prog1 (KEY_PROG1,
 # 148) si es asignable.
