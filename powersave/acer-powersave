@@ -35,7 +35,11 @@ CONFIG = "/etc/acer-powersave/profiles.conf"
 CPU = Path("/sys/devices/system/cpu")
 PSTATE = CPU / "intel_pstate"
 NVIDIA_ROOT_PORT = "0000:00:01.0"
-NVIDIA_FUNCS = ("0000:01:00.1", "0000:01:00.0")  # audio HDMI primero
+NVIDIA_GPU = "0000:01:00.0"   # la funcion VGA
+# Todas las funciones de la tarjeta, de mayor a menor: audio HDMI, USB-C xHCI
+# y UCSI antes que la VGA. Mientras quede un hijo vivo colgando del puente, el
+# puerto raiz no puede alcanzar D3cold, asi que hay que retirarlas todas.
+NVIDIA_FUNCS = ("0000:01:00.3", "0000:01:00.2", "0000:01:00.1", "0000:01:00.0")
 FAN_SYS = Path("/sys/module/linuwu_sense/drivers/platform:acer-wmi/acer-wmi"
                "/predator_sense/fan_speed")
 
@@ -80,20 +84,37 @@ def read_first(path, default=""):
 # --------------------------------------------------------------------------
 
 def gpu_present():
-    return Path(f"/sys/bus/pci/devices/{NVIDIA_FUNCS[1]}").exists()
+    return Path(f"/sys/bus/pci/devices/{NVIDIA_GPU}").exists()
 
 
 def gpu_in_use():
-    """Devuelve el motivo por el que no se puede apagar, o None si esta libre."""
-    for mod in ("nvidia_drm", "nvidia_modeset", "nvidia_uvm", "nvidia"):
-        refcnt = read_first(f"/sys/module/{mod}/refcnt")
-        if refcnt and refcnt != "0":
-            return f"el modulo {mod} tiene refcount {refcnt}"
-    if Path("/dev/nvidia0").exists():
-        r = subprocess.run(["fuser", "/dev/nvidia0"],
-                           capture_output=True, text=True)
-        if r.stdout.strip():
-            return f"hay procesos usando /dev/nvidia0: {r.stdout.strip()}"
+    """Devuelve el motivo por el que no se puede apagar, o None si esta libre.
+
+    El refcount de los modulos NO sirve como criterio: con modeset=1,
+    nvidia_drm arrastra un refcount de 1 permanente aunque no la use nadie, y
+    los modulos se referencian entre si. Lo que de verdad indica uso son los
+    ficheros de dispositivo abiertos, que es lo que impide descargarlos."""
+    abiertos = []
+    for proc in Path("/proc").iterdir():
+        if not proc.name.isdigit():
+            continue
+        try:
+            for fd in (proc / "fd").iterdir():
+                destino = os.readlink(fd)
+                if destino.startswith("/dev/nvidia"):
+                    nombre = (proc / "comm").read_text().strip()
+                    abiertos.append(f"{nombre} (pid {proc.name})")
+                    break
+        except OSError:
+            continue        # el proceso murio o no es nuestro: se ignora
+
+    if abiertos:
+        return "lo estan usando: " + ", ".join(sorted(set(abiertos))[:5])
+
+    # nvidia_uvm con refcount propio significa CUDA en marcha, y eso si bloquea.
+    uvm = read_first("/sys/module/nvidia_uvm/refcnt")
+    if uvm and uvm not in ("0", ""):
+        return f"hay trabajo CUDA en curso (nvidia_uvm refcount {uvm})"
     return None
 
 
@@ -163,7 +184,7 @@ def gpu_on():
 
     # Runtime PM en la GPU, no solo en el puente: sin esto el kernel la deja
     # en "on" y nunca suspende, quedandose en D0 a 7-10 W aunque no se use.
-    write_sysfs(f"/sys/bus/pci/devices/{NVIDIA_FUNCS[1]}/power/control", "auto")
+    write_sysfs(f"/sys/bus/pci/devices/{NVIDIA_GPU}/power/control", "auto")
     write_sysfs(f"/sys/bus/pci/devices/{NVIDIA_ROOT_PORT}/power/control", "auto")
     return True
 
