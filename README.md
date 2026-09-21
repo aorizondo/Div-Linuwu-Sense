@@ -37,6 +37,40 @@ estan en `/usr/share/doc/linuwu-sense-dkms/README.Debian`.
 | `Makefile` respeta `KERNELRELEASE` | DKMS compila para kernels distintos del que esta corriendo |
 | Empaquetado DKMS + CI | `.deb` construidos y publicados automaticamente, con matriz de compilacion sobre trixie, forky y sid |
 
+### Aviso sobre el RGB del teclado: el primer campo no es un "modo"
+
+El README original documenta el primer parametro de `four_zone_mode` como
+**Mode (0-7)**, con `0` = *Static*. En al menos algunos firmwares (verificado
+en un Predator PH315-53 leyendo su DSDT) **no es eso**: el metodo `WMBH` 0x14
+escribe ese byte en `KBLE`, el registro del EC que enciende la
+retroiluminacion, y **el valor 0 la apaga por completo**.
+
+```
+KBLE = BHLK[0]   <- enciende/apaga  (documentado como "mode")
+KBLS = BHLK[1]   <- speed
+KBBP = BHLK[2]   <- brightness
+KBCS = BHLK[3]   <- color scheme
+KBED = BHLK[4]   <- direction
+KBCR/KBCG/KBCB   <- red / green / blue
+```
+
+Consecuencias practicas:
+
+* `echo "0,0,100,0,255,255,255"` no da un blanco estatico al 100 %: **apaga el
+  teclado**, aunque el sysfs siga reportando el valor escrito.
+* Las teclas Fn de brillo del teclado **dejan de funcionar** mientras
+  `KBLE = 0`, porque el EC solo las atiende con la retroiluminacion habilitada.
+  Es facil confundir esto con un driver que no soporta el brillo.
+* Para encender, usa un primer campo distinto de cero, por ejemplo:
+
+  ```bash
+  echo "2,1,100,1,255,0,0" > .../four_zoned_kb/four_zone_mode
+  ```
+
+Este fork corrige ademas un fallo derivado: `set_per_zone_color()` llamaba a
+`set_kb_status()` con `0` en ese campo para fijar solo el brillo, de modo que
+**cada cambio de color por zona apagaba el teclado**.
+
 ### acer-powersave
 
 Aplica los ajustes de energia que corresponden al perfil activo de

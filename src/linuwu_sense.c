@@ -4360,7 +4360,20 @@ static acpi_status set_per_zone_color(struct per_zone_color *input)
     u64 *zones[] = {&input->zone1, &input->zone2, &input->zone3, &input->zone4};
     u8 zone_ids[] = {0x1, 0x2, 0x4, 0x8};
 
-    status = set_kb_status(0, 0, input->brightness, 0, 0, 0, 0);
+    /*
+     * El primer parametro no es un "modo" cualquiera: el firmware lo escribe
+     * en KBLE (metodo WMBH 0x14 -> \_SB.PCI0.LPCB.EC0.KBLE) y el valor 0 apaga
+     * la retroiluminacion entera. Aqui solo se quiere fijar el brillo -- los
+     * colores por zona van por ACER_WMID_SET_GAMING_RGB_KB_METHODID -- asi que
+     * pasar 0 apagaba el teclado en cada cambio de color, y de paso dejaba de
+     * funcionar el ajuste de brillo por las teclas Fn, que el EC solo atiende
+     * con KBLE distinto de cero.
+     *
+     * Se conserva el efecto que hubiera activo; si no habia ninguno se usa el
+     * primero valido en vez de apagar.
+     */
+    status = set_kb_status(current_kb_state.mode ? current_kb_state.mode : 1,
+                           0, input->brightness, 0, 0, 0, 0);
     if (ACPI_FAILURE(status))
     {
         pr_err("Error setting KB status.\n");
