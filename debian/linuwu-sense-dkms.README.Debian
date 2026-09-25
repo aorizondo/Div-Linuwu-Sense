@@ -73,6 +73,37 @@ Writing per_zone_mode does all three. Two things worth knowing:
 
 This was recovered by disassembling the Windows PredatorSense application.
 
+Charge limit
+------------
+The four-zone keyboard is not the only thing the firmware under-reports. Its
+charge limit has exactly two positions -- battery health mode on, cutting
+around 80%, and off, charging to the top -- so anything in between has to be
+emulated. The module watches the capacity every 30 seconds and switches health
+mode on when the target is reached, off when it drops below the resume point.
+
+It is published under the names the kernel already defines, on the battery and
+not in the module's own sysfs, so that GNOME, KDE, upower or TLP find it
+without knowing anything about this machine:
+
+    /sys/class/power_supply/BAT1/charge_control_end_threshold    80-100
+    /sys/class/power_supply/BAT1/charge_control_start_threshold  resume point
+
+Two things worth knowing:
+
+ * With health mode on the battery settles at 78-79%, never at a clean 80.
+   That is why 80 is treated as "health mode always on" instead of waiting to
+   see a capacity of 80, which would never arrive, and why nothing below 80 is
+   accepted.
+ * 100 means health mode always off. Waiting to reach 100% before switching it
+   on would be pointless, and on a firmware that never quite reports 100 it
+   would never trigger.
+
+On load the module does not impose anything: it reads health mode and reports
+80 or 100 accordingly, so loading it never changes a limit the user had set.
+That also means it cannot remember an intermediate value across a reboot --
+the firmware only keeps the two states -- so acer-powersave writes it back at
+start-up from its configuration file.
+
 Debug helper
 ------------
 predator_sense/wmi_call invokes any gaming WMI method:

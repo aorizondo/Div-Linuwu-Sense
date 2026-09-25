@@ -38,6 +38,7 @@
 #include <linux/i8042.h>
 #include <linux/rfkill.h>
 #include <linux/workqueue.h>
+#include <acpi/battery.h>
 #include <linux/debugfs.h>
 #include <linux/slab.h>
 #include <linux/input.h>
@@ -3485,7 +3486,7 @@ struct set_battery_health_control_output
 
 static acpi_status battery_health_query(int mode, int *enabled)
 {
-    pr_info("battery health query: %d\n", mode);
+    pr_debug("battery health query: %d\n", mode);
     acpi_status status;
     union acpi_object *obj;
     struct get_battery_health_control_status_input params = {
@@ -3539,7 +3540,7 @@ failed:
 static acpi_status battery_health_set(u8 function, u8 function_status)
 {
 
-    pr_info("battery_health_set: %d | %d\n", function, function_status);
+    pr_debug("battery_health_set: %d | %d\n", function, function_status);
 
     acpi_status status;
     union acpi_object *obj;
@@ -4181,6 +4182,263 @@ static ssize_t wmi_call_store(struct device *dev, struct device_attribute *attr,
 }
 
 static DEVICE_ATTR_RW(wmi_call);
+
+/* ---------------------------------------------------------------------------
+ *  Tope de carga
+ *
+ *  El firmware solo conoce dos estados: el health mode encendido, que corta la
+ *  carga alrededor del 80%, y apagado, que carga hasta arriba. Los topes
+ *  intermedios se consiguen vigilando la capacidad y encendiendo el health
+ *  mode al alcanzarla.
+ *
+ *  Se publican con los nombres que el nucleo ya define para esto, en el
+ *  directorio de la bateria y no en el sysfs propio del driver, de forma que
+ *  GNOME, KDE, upower o TLP lo encuentren sin saber nada de esta maquina:
+ *
+ *      /sys/class/power_supply/BAT1/charge_control_end_threshold
+ *      /sys/class/power_supply/BAT1/charge_control_start_threshold
+ * ------------------------------------------------------------------------- */
+
+#define ACER_CHARGE_END_MIN 80
+#define ACER_CHARGE_END_MAX 100
+#define ACER_CHARGE_HYSTERESIS 5
+#define ACER_CHARGE_POLL_SECS 30
+
+/* -1 significa "lo que ya este haciendo el firmware". Es lo que hay por
+ * defecto a proposito: cargar el modulo no debe cambiar el tope que el usuario
+ * tenia puesto, y con un 100 fijo apagaria el health mode de quien lo tuviera
+ * encendido. */
+static int charge_end_threshold = -1;
+module_param(charge_end_threshold, int, 0444);
+MODULE_PARM_DESC(charge_end_threshold,
+                 "Stop charging at this percentage (80-100; default: keep "
+                 "whatever the firmware is already doing)");
+
+static int charge_start_threshold = -1;
+module_param(charge_start_threshold, int, 0444);
+MODULE_PARM_DESC(charge_start_threshold,
+                 "Resume charging below this percentage (default: end - 5)");
+
+static struct power_supply *acer_battery;
+static struct delayed_work acer_charge_work;
+static DEFINE_MUTEX(acer_charge_lock);
+
+static int acer_battery_capacity(void)
+{
+    union power_supply_propval val;
+    int err;
+
+    if (!acer_battery)
+        return -ENODEV;
+
+    err = power_supply_get_property(acer_battery, POWER_SUPPLY_PROP_CAPACITY,
+                                    &val);
+    if (err)
+        return err;
+
+    return val.intval;
+}
+
+/* Decide si el health mode tiene que estar encendido y lo cambia si hace
+ * falta. Se llama con acer_charge_lock cogido.
+ *
+ * Con "forzar" se salta la banda de histeresis. Es lo que se quiere cuando
+ * alguien acaba de escribir un tope nuevo: si pide 95 con la bateria al 78 lo
+ * que espera es que empiece a cargar, no que se quede parada aguardando a
+ * bajar hasta el umbral de reanudacion. La histeresis solo tiene sentido en
+ * las comprobaciones periodicas, que es donde evita el ciclado. */
+static void acer_charge_limit_apply(bool forzar)
+{
+    int enabled, capacity, wanted;
+
+    if (battery_health_query(HEALTH_MODE, &enabled) != AE_OK)
+        return;
+
+    if (charge_end_threshold >= ACER_CHARGE_END_MAX)
+    {
+        /* Cargar hasta arriba: aqui el health mode solo estorba. */
+        wanted = 0;
+    }
+    else if (charge_end_threshold <= ACER_CHARGE_END_MIN)
+    {
+        /* El 80% es justo lo que hace el health mode por su cuenta, y hay que
+         * tratarlo aparte: con el encendido la bateria se queda en 78 o 79, de
+         * modo que esperar a ver un 80 para encenderlo no funcionaria nunca. */
+        wanted = 1;
+    }
+    else
+    {
+        capacity = acer_battery_capacity();
+        if (capacity < 0)
+            return;
+
+        if (capacity >= charge_end_threshold)
+            wanted = 1;
+        else if (forzar || capacity <= charge_start_threshold)
+            wanted = 0;
+        else
+            return; /* dentro de la banda: se deja como este */
+    }
+
+    if (wanted != enabled)
+    {
+        pr_info("charge limit %d%%: turning battery health mode %s at %d%%\n",
+                charge_end_threshold, wanted ? "on" : "off",
+                acer_battery_capacity());
+        battery_health_set(HEALTH_MODE, wanted);
+    }
+}
+
+static void acer_charge_work_fn(struct work_struct *work)
+{
+    mutex_lock(&acer_charge_lock);
+    acer_charge_limit_apply(false);
+    mutex_unlock(&acer_charge_lock);
+
+    schedule_delayed_work(&acer_charge_work, ACER_CHARGE_POLL_SECS * HZ);
+}
+
+static ssize_t charge_control_end_threshold_show(struct device *dev,
+                                                 struct device_attribute *attr,
+                                                 char *buf)
+{
+    return sysfs_emit(buf, "%d\n", charge_end_threshold);
+}
+
+static ssize_t charge_control_end_threshold_store(struct device *dev,
+                                                  struct device_attribute *attr,
+                                                  const char *buf, size_t count)
+{
+    int val, err;
+
+    err = kstrtoint(buf, 10, &val);
+    if (err)
+        return err;
+
+    /* Por debajo de 80 no hay nada que hacer: es lo mas bajo que corta el
+     * firmware. Se rechaza en vez de redondear para que quien lo escriba se
+     * entere de que el valor no es el que pidio. */
+    if (val < ACER_CHARGE_END_MIN || val > ACER_CHARGE_END_MAX)
+        return -EINVAL;
+
+    mutex_lock(&acer_charge_lock);
+    charge_end_threshold = val;
+    if (charge_start_threshold >= val)
+        charge_start_threshold = max(0, val - ACER_CHARGE_HYSTERESIS);
+    acer_charge_limit_apply(true);
+    mutex_unlock(&acer_charge_lock);
+
+    return count;
+}
+static DEVICE_ATTR_RW(charge_control_end_threshold);
+
+static ssize_t charge_control_start_threshold_show(struct device *dev,
+                                                   struct device_attribute *attr,
+                                                   char *buf)
+{
+    return sysfs_emit(buf, "%d\n", charge_start_threshold);
+}
+
+static ssize_t charge_control_start_threshold_store(struct device *dev,
+                                                    struct device_attribute *attr,
+                                                    const char *buf, size_t count)
+{
+    int val, err;
+
+    err = kstrtoint(buf, 10, &val);
+    if (err)
+        return err;
+
+    if (val < 0 || val >= charge_end_threshold)
+        return -EINVAL;
+
+    mutex_lock(&acer_charge_lock);
+    charge_start_threshold = val;
+    acer_charge_limit_apply(true);
+    mutex_unlock(&acer_charge_lock);
+
+    return count;
+}
+static DEVICE_ATTR_RW(charge_control_start_threshold);
+
+static struct attribute *acer_battery_attrs[] = {
+    &dev_attr_charge_control_end_threshold.attr,
+    &dev_attr_charge_control_start_threshold.attr,
+    NULL};
+ATTRIBUTE_GROUPS(acer_battery);
+
+static int acer_battery_add(struct power_supply *battery,
+                            struct acpi_battery_hook *hook)
+{
+    int err = device_add_groups(&battery->dev, acer_battery_groups);
+
+    if (err)
+        return err;
+
+    acer_battery = battery;
+
+    /* Se aplica ya y no en la siguiente vuelta del temporizador, porque al
+     * cargar el modulo el health mode puede haber quedado de la sesion
+     * anterior con un valor que no corresponde al tope pedido. */
+    mutex_lock(&acer_charge_lock);
+    acer_charge_limit_apply(true);
+    mutex_unlock(&acer_charge_lock);
+
+    return 0;
+}
+
+static int acer_battery_remove(struct power_supply *battery,
+                               struct acpi_battery_hook *hook)
+{
+    device_remove_groups(&battery->dev, acer_battery_groups);
+    acer_battery = NULL;
+    return 0;
+}
+
+static struct acpi_battery_hook acer_battery_hook = {
+    .name = "Acer charge limit",
+    .add_battery = acer_battery_add,
+    .remove_battery = acer_battery_remove,
+};
+
+static void acer_charge_limit_init(void)
+{
+    int enabled;
+
+    if (charge_end_threshold < 0)
+    {
+        /* Sin tope pedido se deduce del hardware: con el health mode
+         * encendido el firmware ya esta cortando en el 80, y apagado carga
+         * hasta arriba. Asi el atributo dice la verdad desde el primer
+         * momento sin haber tocado nada. */
+        if (battery_health_query(HEALTH_MODE, &enabled) == AE_OK)
+            charge_end_threshold = enabled ? ACER_CHARGE_END_MIN
+                                           : ACER_CHARGE_END_MAX;
+        else
+            charge_end_threshold = ACER_CHARGE_END_MAX;
+    }
+    else if (charge_end_threshold < ACER_CHARGE_END_MIN ||
+             charge_end_threshold > ACER_CHARGE_END_MAX)
+    {
+        pr_warn("charge_end_threshold %d out of range, using %d\n",
+                charge_end_threshold, ACER_CHARGE_END_MAX);
+        charge_end_threshold = ACER_CHARGE_END_MAX;
+    }
+    if (charge_start_threshold < 0 ||
+        charge_start_threshold >= charge_end_threshold)
+        charge_start_threshold = max(0, charge_end_threshold -
+                                            ACER_CHARGE_HYSTERESIS);
+
+    INIT_DELAYED_WORK(&acer_charge_work, acer_charge_work_fn);
+    battery_hook_register(&acer_battery_hook);
+    schedule_delayed_work(&acer_charge_work, ACER_CHARGE_POLL_SECS * HZ);
+}
+
+static void acer_charge_limit_exit(void)
+{
+    cancel_delayed_work_sync(&acer_charge_work);
+    battery_hook_unregister(&acer_battery_hook);
+}
 
 static struct attribute *predator_sense_attrs[] = {
     &dev_attr_version.attr,
@@ -5053,6 +5311,11 @@ static int acer_platform_probe(struct platform_device *device)
             goto error_nitro_sense;
     }
 
+    /* El tope de carga se apoya en el health mode, que es lo que hay detras
+     * de battery_limiter: donde no exista ese atributo tampoco hay tope. */
+    if (has_cap(ACER_CAP_PREDATOR_SENSE))
+        acer_charge_limit_init();
+
     if (has_cap(ACER_CAP_FAN_SPEED_READ))
     {
         err = acer_wmi_hwmon_init();
@@ -5129,6 +5392,8 @@ static void acer_platform_remove(struct platform_device *device)
         sysfs_remove_group(&device->dev.kobj, &four_zoned_kb_attr_group);
         four_zone_kb_state_save();
     }
+    if (has_cap(ACER_CAP_PREDATOR_SENSE))
+        acer_charge_limit_exit();
 
     acer_rfkill_exit();
 }

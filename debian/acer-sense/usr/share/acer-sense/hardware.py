@@ -306,6 +306,30 @@ def guardar_curva(temp_minima, curva):
         return False, str(e)
 
 
+def tope_carga_get():
+    """Tope de carga en por ciento, o None si el driver no lo publica."""
+    try:
+        return int(_leer(BAT / "charge_control_end_threshold"))
+    except ValueError:
+        return None
+
+
+def tope_carga_set(porcentaje):
+    """Fija el tope y lo deja guardado para el siguiente arranque.
+
+    El atributo de la bateria es del nucleo, no del driver, y el paquete no
+    puede cederlo a un grupo como hace con su propio sysfs: se delega en la
+    orden acer-powersave, que ademas lo escribe en la configuracion."""
+    try:
+        r = subprocess.run(
+            ["pkexec", "/usr/bin/acer-powersave", "charge-limit",
+             str(porcentaje)],
+            capture_output=True, text=True, timeout=60)
+        return r.returncode == 0, (r.stderr or r.stdout).strip()
+    except (OSError, subprocess.SubprocessError) as e:
+        return False, str(e)
+
+
 def kb_zonas_set(colores, brillo):
     return _escribir(KB / "per_zone_mode", ",".join(colores) + f",{brillo}")
 

@@ -52,6 +52,17 @@ Applies a fan curve with hysteresis, read from
 .IR /etc/acer\-powersave/profiles.conf .
 Needs the linuwu_sense module. Requires root.
 .TP
+.BI charge-limit " PERCENT"
+Stops charging at the given percentage, from 80 to 100, and records it in the
+configuration file so that it survives a reboot. Requires root. Also accepts
+the older name
+.BR tope\-carga .
+.IP
+The firmware only knows two states: battery health mode on, which cuts the
+charge around 80%, and off, which charges to the top. Anything in between is
+the driver watching the capacity. With health mode on the battery settles at
+78-79%, never at a clean 80, which is why 80 is the lowest limit accepted.
+.TP
 .BI save-curve " MIN_TEMP CURVE"
 Writes a fan curve to the configuration file. Invoked by the graphical
 interface through polkit; rarely useful by hand. Also accepts the older name
@@ -59,7 +70,13 @@ interface through polkit; rarely useful by hand. Also accepts the older name
 .SH FILES
 .TP
 .I /etc/acer-powersave/profiles.conf
-Settings applied for each profile. Keys are documented in the file itself.
+Settings applied for each profile, including the charge limit. Keys are
+documented in the file itself.
+.TP
+.I /sys/class/power_supply/BAT1/charge_control_end_threshold
+The charge limit itself, published by the linuwu_sense module under the name
+the kernel already defines for it. Writing to it applies the limit but does
+not record it.
 .TP
 .I /etc/default/grub.d/50-acer-powersave.cfg
 Recommended kernel command line parameters.

@@ -30,15 +30,18 @@ System power profile, panel refresh rate, and powering the NVIDIA GPU up or
 down while the system is running.
 .TP
 .B Battery and system
-80% charge limit, calibration, USB charging while the machine is off, LCD
-override and boot animation.
+Charge limit from 80 to 100%, calibration, USB charging while the machine is
+off, LCD override and boot animation.
 .SH LIMITATIONS
 The firmware exposes no fine\-grained frequency or voltage control: what Acer
 calls overclocking is Turbo mode, which has two states and is triggered by the
 physical button on the laptop.
 .PP
-The battery charge limit is fixed at 80% by the firmware and takes no other
-value.
+The firmware's own charge limit has two positions: cut around 80% or charge to
+the top. Anything in between is the driver watching the capacity and switching
+the firmware limit on when the target is reached. With that limit on, the
+battery settles at 78-79% rather than a clean 80, so 80 is the lowest target
+that can be asked for.
 .PP
 On the PH315\-53 the firmware answers only five of the eight backlight
 effects. The three it ignores are shown greyed out rather than hidden, so it is

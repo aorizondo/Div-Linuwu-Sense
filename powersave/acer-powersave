@@ -568,6 +568,7 @@ def cmd_daemon(_args):
 
     cfg = leer_config()
     cargar_excluir(cfg)
+    aplicar_tope_carga(cfg)
 
     # La retroiluminacion del teclado no tiene nada que ver con el perfil de
     # energia, asi que se vigila en su propio hilo en vez de meterla en el
@@ -735,6 +736,78 @@ def cmd_fan(args):
     return 0
 
 
+# ---------------------------------------------------------------------------
+#  Tope de carga
+# ---------------------------------------------------------------------------
+
+def ruta_tope_carga():
+    """El atributo estandar del nucleo, en la bateria que lo publique."""
+    for b in sorted(Path("/sys/class/power_supply").glob("BAT*")):
+        r = b / "charge_control_end_threshold"
+        if r.exists():
+            return r
+    return None
+
+
+def aplicar_tope_carga(cfg):
+    """Repone el tope guardado. El modulo no lo recuerda entre arranques: al
+    cargarse deduce 80 o 100 del health mode, que es lo unico que el firmware
+    conserva, de modo que un 90 se perderia sin esto."""
+    valor = opcion(cfg, "general", "charge_limit", "tope_carga", fallback="")
+    if not valor:
+        return
+    ruta = ruta_tope_carga()
+    if not ruta:
+        log("tope de carga: el modulo no publica charge_control_end_threshold")
+        return
+    try:
+        pct = int(valor)
+    except ValueError:
+        log(f"tope de carga: {valor!r} no es un numero")
+        return
+    if write_sysfs(ruta, pct):
+        log(f"tope de carga: {pct}%")
+
+
+def cmd_tope_carga(args):
+    """Fija el tope y lo deja guardado. Lo invoca la interfaz por pkexec."""
+    if os.geteuid() != 0:
+        print("charge-limit requiere root")
+        return 1
+
+    ruta = ruta_tope_carga()
+    if not ruta:
+        print("el modulo linuwu_sense no publica charge_control_end_threshold")
+        return 1
+
+    # Aqui se escribe a pelo y no con write_sysfs: interesa el error que
+    # devuelva el nucleo. El modulo rechaza cualquier cosa fuera de 80-100,
+    # que es lo unico que el firmware sabe hacer, y quien invoque la orden
+    # tiene que enterarse en vez de ver un exito falso.
+    try:
+        ruta.write_text(str(args.porcentaje))
+    except OSError as e:
+        print(f"el nucleo rechazo el tope {args.porcentaje}: {e}")
+        return 1
+
+    import configparser
+    cp = configparser.ConfigParser()
+    cp.read(CONFIG)
+    if not cp.has_section("general"):
+        cp.add_section("general")
+    cp.set("general", "charge_limit", str(args.porcentaje))
+    try:
+        os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
+        with open(CONFIG, "w") as f:
+            cp.write(f)
+    except OSError as e:
+        print(f"tope aplicado, pero no se pudo guardar en {CONFIG}: {e}")
+        return 1
+
+    print(f"tope de carga: {args.porcentaje}%")
+    return 0
+
+
 def cmd_guardar_curva(args):
     """Escribe la curva en la configuracion. Lo invoca la interfaz por pkexec."""
     if os.geteuid() != 0:
@@ -786,6 +859,9 @@ def main():
     gc.add_argument("temp_minima", type=int, metavar="MIN_TEMP")
     gc.add_argument("curva", metavar="CURVE",
                     help="temperature:percentage pairs, comma separated")
+    tc = sub.add_parser("charge-limit", aliases=["tope-carga"],
+                        help="stop charging at this percentage (80-100)")
+    tc.add_argument("porcentaje", type=int, metavar="PERCENT")
 
     args = ap.parse_args()
     ordenes = {
@@ -793,6 +869,7 @@ def main():
         "measure": cmd_medir, "medir": cmd_medir,
         "gpu": cmd_gpu, "fan": cmd_fan,
         "save-curve": cmd_guardar_curva, "guardar-curva": cmd_guardar_curva,
+        "charge-limit": cmd_tope_carga, "tope-carga": cmd_tope_carga,
     }
     return ordenes[args.cmd](args)
 

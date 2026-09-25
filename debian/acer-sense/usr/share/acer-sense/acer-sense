@@ -782,17 +782,21 @@ class PaginaSistema(QWidget):
 
         caja_bat = QGroupBox("Batería")
         v = QVBoxLayout(caja_bat)
-        self.ch_limite = QCheckBox("Limitar la carga al 80 %")
-        self.ch_limite.clicked.connect(
-            lambda c: self._attr("battery_limiter", "1" if c else "0"))
-        v.addWidget(self.ch_limite)
-        p = QLabel(
-            "El firmware sólo admite este tope fijo: no se puede elegir otro "
-            "porcentaje ni detener la carga a voluntad. Verificado leyendo el "
-            "DSDT de este equipo.")
-        p.setObjectName("pista")
-        p.setWordWrap(True)
-        v.addWidget(p)
+        self.en_uso = ControlesEnUso()
+        tope = hw.tope_carga_get()
+        self.sl_tope, self.lb_tope, cont_tope = _deslizador(
+            80, 100, tope if tope is not None else 100, "%")
+        self.sl_tope.setEnabled(tope is not None)
+        self.sl_tope.sliderReleased.connect(self._aplicar_tope)
+        self.en_uso.vigilar(self.sl_tope)
+        v.addLayout(fila(
+            "Cargar hasta", cont_tope,
+            "El firmware sólo sabe dos cosas: cortar cerca del 80 % o cargar "
+            "del todo. Los valores intermedios los vigila el driver, que "
+            "activa el corte al llegar al tope y lo quita al bajar de él.\n"
+            "Con el tope en 80 la batería se queda en 78 o 79 %: ese es el "
+            "punto real en el que corta el firmware, no un error de lectura. "
+            "Por eso 80 es lo más bajo que se puede pedir."))
         self.ch_calib = QCheckBox("Calibración de batería en curso")
         self.ch_calib.clicked.connect(
             lambda c: self._attr("battery_calibration", "1" if c else "0"))
@@ -837,9 +841,20 @@ class PaginaSistema(QWidget):
         if not ok:
             QMessageBox.warning(self, "Ajuste", err)
 
+    def _aplicar_tope(self):
+        ok, err = hw.tope_carga_set(self.sl_tope.value())
+        if not ok:
+            QMessageBox.warning(self, "Tope de carga", err)
+
     def refrescar(self):
-        for chk, nombre in ((self.ch_limite, "battery_limiter"),
-                            (self.ch_calib, "battery_calibration"),
+        tope = hw.tope_carga_get()
+        if tope is not None and self.en_uso.libre(self.sl_tope):
+            if self.sl_tope.value() != tope:
+                self.sl_tope.blockSignals(True)
+                self.sl_tope.setValue(tope)
+                self.sl_tope.blockSignals(False)
+                self.lb_tope.setText(f"{tope} %")
+        for chk, nombre in ((self.ch_calib, "battery_calibration"),
                             (self.ch_lcd, "lcd_override"),
                             (self.ch_boot, "boot_animation_sound"),
                             (self.ch_timeout, "backlight_timeout")):
