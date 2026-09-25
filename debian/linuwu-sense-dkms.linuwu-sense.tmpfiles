@@ -2,6 +2,12 @@
 # se ignore el fallo cuando el atributo no existe: cada modelo expone solo su
 # subdirectorio (predator_sense o nitro_sense) y el RGB solo en los equipos con
 # teclado de cuatro zonas.
+# El tope de carga vive en la bateria y no en el sysfs del driver, porque usa
+# los nombres que el nucleo ya define para esto. El glob cubre BAT0 o BAT1
+# segun el modelo.
+z- /sys/class/power_supply/BAT*/charge_control_end_threshold 0660 root linuwu_sense -
+z- /sys/class/power_supply/BAT*/charge_control_start_threshold 0660 root linuwu_sense -
+
 z- /sys/module/linuwu_sense/drivers/platform:acer-wmi/acer-wmi/predator_sense/backlight_timeout 0660 root linuwu_sense -
 z- /sys/module/linuwu_sense/drivers/platform:acer-wmi/acer-wmi/predator_sense/battery_calibration 0660 root linuwu_sense -
 z- /sys/module/linuwu_sense/drivers/platform:acer-wmi/acer-wmi/predator_sense/battery_limiter 0660 root linuwu_sense -

@@ -315,19 +315,35 @@ def tope_carga_get():
 
 
 def tope_carga_set(porcentaje):
-    """Fija el tope y lo deja guardado para el siguiente arranque.
+    """Fija el tope de carga.
 
-    El atributo de la bateria es del nucleo, no del driver, y el paquete no
-    puede cederlo a un grupo como hace con su propio sysfs: se delega en la
-    orden acer-powersave, que ademas lo escribe en la configuracion."""
+    El atributo lo cede el paquete al grupo linuwu_sense igual que el resto,
+    asi que en el caso normal se escribe directamente y el cambio es
+    inmediato. Solo si eso falla -permisos perdidos tras recargar el modulo,
+    por ejemplo- se recurre a pkexec, que ademas lo deja guardado.
+
+    De la persistencia se encarga el servicio, que vigila el atributo y lo
+    anota en su configuracion cuando cambia: el modulo no puede recordar un
+    valor intermedio entre arranques."""
+    ruta = BAT / "charge_control_end_threshold"
+    if not ruta.exists():
+        return False, ("El módulo no publica el tope de carga. "
+                       "¿Está cargado linuwu_sense?")
+
+    ok, err = _escribir(ruta, str(porcentaje))
+    if ok:
+        return True, ""
+
     try:
         r = subprocess.run(
             ["pkexec", "/usr/bin/acer-powersave", "charge-limit",
              str(porcentaje)],
             capture_output=True, text=True, timeout=60)
-        return r.returncode == 0, (r.stderr or r.stdout).strip()
+        if r.returncode == 0:
+            return True, ""
+        return False, (r.stderr or r.stdout).strip() or err
     except (OSError, subprocess.SubprocessError) as e:
-        return False, str(e)
+        return False, f"{err}\n{e}"
 
 
 def kb_zonas_set(colores, brillo):

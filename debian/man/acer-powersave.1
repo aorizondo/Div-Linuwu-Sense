@@ -58,6 +58,12 @@ configuration file so that it survives a reboot. Requires root. Also accepts
 the older name
 .BR tope\-carga .
 .IP
+Writing the sysfs attribute directly does the same thing and needs no root:
+the package hands it to the
+.B linuwu_sense
+group. The running daemon notices the change and records it, so the limit
+survives a reboot either way.
+.IP
 The firmware only knows two states: battery health mode on, which cuts the
 charge around 80%, and off, which charges to the top. Anything in between is
 the driver watching the capacity. With health mode on the battery settles at

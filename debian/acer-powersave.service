@@ -32,7 +32,11 @@ RestrictSUIDSGID=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
 SystemCallArchitectures=native
-ReadWritePaths=/sys/devices /sys/bus /sys/module /sys/class
+# /etc/acer-powersave tiene que ser escribible: el servicio anota ahi el tope
+# de carga cuando alguien lo cambia por su cuenta, porque el modulo no puede
+# recordar un valor intermedio entre arranques. Con ProtectSystem=strict el
+# resto de /etc sigue siendo de solo lectura.
+ReadWritePaths=/sys/devices /sys/bus /sys/module /sys/class /etc/acer-powersave
 
 [Install]
 # graphical.target, NO multi-user.target, y el motivo es un ciclo de

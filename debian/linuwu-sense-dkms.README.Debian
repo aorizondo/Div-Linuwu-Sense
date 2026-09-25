@@ -102,7 +102,13 @@ On load the module does not impose anything: it reads health mode and reports
 80 or 100 accordingly, so loading it never changes a limit the user had set.
 That also means it cannot remember an intermediate value across a reboot --
 the firmware only keeps the two states -- so acer-powersave writes it back at
-start-up from its configuration file.
+start-up from its configuration file, and records there whatever anyone else
+sets in the meantime.
+
+Both attributes are handed to the linuwu_sense group like the rest of the
+driver's sysfs, so the graphical interface writes them directly and the change
+is immediate. They live on the battery rather than under the platform device,
+which is why they are listed separately in the tmpfiles configuration.
 
 Debug helper
 ------------

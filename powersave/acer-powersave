@@ -569,6 +569,8 @@ def cmd_daemon(_args):
     cfg = leer_config()
     cargar_excluir(cfg)
     aplicar_tope_carga(cfg)
+    vigilar_tope_carga()
+    GLib.timeout_add_seconds(30, vigilar_tope_carga)
 
     # La retroiluminacion del teclado no tiene nada que ver con el perfil de
     # energia, asi que se vigila en su propio hilo en vez de meterla en el
@@ -766,7 +768,55 @@ def aplicar_tope_carga(cfg):
         log(f"tope de carga: {valor!r} no es un numero")
         return
     if write_sysfs(ruta, pct):
+        vigilar_tope_carga.ultimo = pct
         log(f"tope de carga: {pct}%")
+
+
+def guardar_tope_carga(pct):
+    """Anota el tope en la configuracion. Devuelve un mensaje de error o None."""
+    cp = configparser.ConfigParser()
+    cp.read(CONFIG)
+    if not cp.has_section("general"):
+        cp.add_section("general")
+    cp.set("general", "charge_limit", str(pct))
+    try:
+        os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
+        with open(CONFIG, "w") as f:
+            cp.write(f)
+    except OSError as e:
+        return str(e)
+    return None
+
+
+def vigilar_tope_carga():
+    """Anota el tope cuando alguien lo cambia por su cuenta.
+
+    La interfaz escribe el atributo directamente -el paquete se lo cede al
+    grupo linuwu_sense- para que el cambio sea inmediato y sin pedir
+    contrasena. Pero el modulo no recuerda un valor intermedio entre
+    arranques, asi que alguien tiene que anotarlo, y ese alguien es el
+    servicio, que es el unico que corre como root todo el rato.
+    """
+    ruta = ruta_tope_carga()
+    if not ruta:
+        return True
+
+    try:
+        actual = int(ruta.read_text().strip())
+    except (OSError, ValueError):
+        return True
+
+    if actual != vigilar_tope_carga.ultimo:
+        err = guardar_tope_carga(actual)
+        if err:
+            log(f"tope de carga {actual}%: no se pudo guardar: {err}")
+        else:
+            log(f"tope de carga: {actual}% (guardado)")
+        vigilar_tope_carga.ultimo = actual
+    return True
+
+
+vigilar_tope_carga.ultimo = None
 
 
 def cmd_tope_carga(args):
@@ -790,18 +840,9 @@ def cmd_tope_carga(args):
         print(f"el nucleo rechazo el tope {args.porcentaje}: {e}")
         return 1
 
-    import configparser
-    cp = configparser.ConfigParser()
-    cp.read(CONFIG)
-    if not cp.has_section("general"):
-        cp.add_section("general")
-    cp.set("general", "charge_limit", str(args.porcentaje))
-    try:
-        os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
-        with open(CONFIG, "w") as f:
-            cp.write(f)
-    except OSError as e:
-        print(f"tope aplicado, pero no se pudo guardar en {CONFIG}: {e}")
+    err = guardar_tope_carga(args.porcentaje)
+    if err:
+        print(f"tope aplicado, pero no se pudo guardar en {CONFIG}: {err}")
         return 1
 
     print(f"tope de carga: {args.porcentaje}%")
