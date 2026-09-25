@@ -1,0 +1,281 @@
+#!/usr/bin/python3
+# -*- coding: utf-8 -*-
+"""
+blink - flash the keyboard zones, the way beep flashes the speaker.
+
+Same shape as beep(1): -l is the length of a flash, -d the gap between
+repeats, -r how many times, and -n starts another flash with its own options.
+What beep calls a frequency is a colour here.
+
+Unless told otherwise it saves the keyboard state on entry and puts it back on
+exit, so the usual "flash red twice on an error and leave things as they were"
+needs no shell scripting around it:
+
+    blink -c red -r 2 -l 150
+
+It writes through the standard LED class devices the driver publishes, so the
+brightness of each zone is independent:
+
+    /sys/class/leds/acer-wmi:multicolor:kbd_zoned_backlight-<zone>
+"""
+
+import argparse
+import glob
+import os
+import re
+import sys
+import time
+
+# Los LEDs por zona, de izquierda a derecha. El orden importa: la mascara de
+# zonas de --zones se lee en ese mismo sentido.
+PATRON_LED = "/sys/class/leds/*:kbd_zoned_backlight-*"
+ORDEN_ZONAS = ("left", "middle-left", "middle-right", "right")
+
+# Efectos del driver, para poder devolver el teclado a uno animado. Los LEDs
+# por si solos no saben de efectos: solo del color estatico de cada zona.
+EFECTO = "/sys/devices/platform/acer-wmi/four_zoned_kb/four_zone_mode"
+
+COLORES = {
+    "black": (0, 0, 0), "white": (255, 255, 255), "red": (255, 0, 0),
+    "green": (0, 255, 0), "blue": (0, 0, 255), "yellow": (255, 255, 0),
+    "cyan": (0, 255, 255), "magenta": (255, 0, 255), "orange": (255, 128, 0),
+    "purple": (128, 0, 255), "pink": (255, 96, 160), "lime": (160, 255, 0),
+    "teal": (0, 200, 215), "off": (0, 0, 0),
+}
+
+
+def error(mensaje):
+    print(f"blink: {mensaje}", file=sys.stderr)
+    return 1
+
+
+# ---------------------------------------------------------------------------
+#  Acceso a los LEDs
+# ---------------------------------------------------------------------------
+
+def zonas_disponibles():
+    """Devuelve los directorios de zona ordenados de izquierda a derecha.
+
+    Se ordena por ORDEN_ZONAS y no alfabeticamente: "middle-left" va antes que
+    "middle-right", pero "left" alfabeticamente iria detras de ambos.
+    """
+    hallados = {}
+    for ruta in glob.glob(PATRON_LED):
+        nombre = os.path.basename(ruta)
+        sufijo = nombre.rsplit("kbd_zoned_backlight-", 1)[-1]
+        hallados[sufijo] = ruta
+    return [hallados[z] for z in ORDEN_ZONAS if z in hallados]
+
+
+def _leer(ruta, por_defecto=""):
+    try:
+        with open(ruta) as f:
+            return f.read().strip()
+    except OSError:
+        return por_defecto
+
+
+def _escribir(ruta, valor):
+    try:
+        with open(ruta, "w") as f:
+            f.write(str(valor))
+        return True
+    except PermissionError:
+        raise SystemExit(error(
+            f"sin permiso para escribir en {ruta}.\n"
+            "       Tu usuario tiene que estar en el grupo linuwu_sense:\n"
+            "           sudo usermod -aG linuwu_sense $USER\n"
+            "       y volver a iniciar sesion."))
+    except OSError as e:
+        raise SystemExit(error(f"no se pudo escribir en {ruta}: {e}"))
+
+
+def leer_estado(zonas):
+    """Estado completo: color y brillo de cada zona, y el efecto en curso."""
+    return {
+        "zonas": [(_leer(os.path.join(z, "multi_intensity"), "0 0 0"),
+                   _leer(os.path.join(z, "brightness"), "0")) for z in zonas],
+        "efecto": _leer(EFECTO),
+    }
+
+
+def restaurar_estado(zonas, estado):
+    for z, (intensidad, brillo) in zip(zonas, estado["zonas"]):
+        _escribir(os.path.join(z, "multi_intensity"), intensidad)
+        _escribir(os.path.join(z, "brightness"), brillo)
+    # El efecto va al final: si era animado, vuelve a tomar el mando y deja sin
+    # sentido los colores estaticos que acabamos de reponer, que es justo el
+    # comportamiento correcto.
+    if estado["efecto"] and os.path.exists(EFECTO):
+        _escribir(EFECTO, estado["efecto"])
+
+
+def pintar(zonas, mascara, rgb, brillo):
+    """Aplica un color y un brillo a las zonas marcadas."""
+    r, g, b = rgb
+    for i, z in enumerate(zonas):
+        if not mascara[i]:
+            continue
+        _escribir(os.path.join(z, "multi_intensity"), f"{r} {g} {b}")
+        _escribir(os.path.join(z, "brightness"), brillo)
+
+
+# ---------------------------------------------------------------------------
+#  Argumentos
+# ---------------------------------------------------------------------------
+
+def color(texto):
+    """Acepta un nombre conocido o RRGGBB, con o sin almohadilla."""
+    t = texto.strip().lower()
+    if t in COLORES:
+        return COLORES[t]
+    hexa = t[1:] if t.startswith("#") else t
+    if not re.fullmatch(r"[0-9a-f]{6}", hexa):
+        raise argparse.ArgumentTypeError(
+            f"color no reconocido: {texto!r}. Usa RRGGBB o uno de: "
+            + ", ".join(sorted(COLORES)))
+    return tuple(int(hexa[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def mascara(texto):
+    """Zonas en binario: 1000 es la primera, 0001 la ultima, 1111 todas."""
+    t = texto.strip()
+    if not re.fullmatch(r"[01]{1,4}", t):
+        raise argparse.ArgumentTypeError(
+            f"zonas no validas: {texto!r}. Son de una a cuatro cifras binarias, "
+            "1000 = primera zona, 0001 = ultima, 1111 = todas")
+    # Se rellena por la derecha para que "1" signifique "solo la primera".
+    t = t.ljust(4, "0")
+    return [c == "1" for c in t]
+
+
+def porcentaje(texto):
+    v = int(texto)
+    if not 0 <= v <= 100:
+        raise argparse.ArgumentTypeError("el brillo va de 0 a 100")
+    return v
+
+
+def construir_analizador():
+    p = argparse.ArgumentParser(
+        prog="blink",
+        description="Flash the keyboard zones, the way beep flashes the speaker.",
+        epilog="Colours: " + ", ".join(sorted(COLORES)) + ", or RRGGBB.",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("-c", "--color", type=color, default=COLORES["red"],
+                   metavar="COLOUR",
+                   help="colour of the flash (beep calls this a frequency)")
+    p.add_argument("-C", "--color-end", type=color, default=None,
+                   metavar="COLOUR",
+                   help="fade from --color to this one over the flash")
+    p.add_argument("-b", "--brightness", type=porcentaje, default=100,
+                   metavar="0-100", help="brightness of the flash")
+    p.add_argument("-B", "--brightness-end", type=porcentaje, default=None,
+                   metavar="0-100", help="fade brightness to this value")
+    p.add_argument("-z", "--zones", type=mascara, default=[True] * 4,
+                   metavar="BITS",
+                   help="zones as binary digits: 1000 first, 0001 last, "
+                        "1111 all (default)")
+    p.add_argument("-l", "--length", type=int, default=200, metavar="MS",
+                   help="length of the flash in milliseconds (default 200)")
+    p.add_argument("-d", "--delay", type=int, default=None, metavar="MS",
+                   help="gap between repeats (default: same as --length)")
+    p.add_argument("-r", "--repeat", type=int, default=1, metavar="N",
+                   help="how many times to flash (default 1)")
+    p.add_argument("-n", "--new", action="store_true",
+                   help="start another flash with its own options")
+    p.add_argument("--keep", action="store_true",
+                   help="leave the last colour on instead of restoring")
+    p.add_argument("--restore-only", action="store_true",
+                   help="restore nothing, just print the current state and exit")
+    return p
+
+
+def trocear(argv):
+    """Parte la linea de ordenes en tramos separados por -n, como beep."""
+    tramos, actual = [], []
+    for a in argv:
+        if a in ("-n", "--new"):
+            tramos.append(actual)
+            actual = []
+        else:
+            actual.append(a)
+    tramos.append(actual)
+    return [t for t in tramos if t] or [[]]
+
+
+# ---------------------------------------------------------------------------
+#  Ejecucion
+# ---------------------------------------------------------------------------
+
+def interpolar(a, b, t):
+    """Punto intermedio entre dos colores o dos brillos."""
+    if isinstance(a, tuple):
+        return tuple(int(x + (y - x) * t) for x, y in zip(a, b))
+    return int(a + (b - a) * t)
+
+
+def ejecutar(zonas, args):
+    espera = args.length if args.delay is None else args.delay
+    hay_transicion = args.color_end is not None or args.brightness_end is not None
+    color_fin = args.color_end if args.color_end is not None else args.color
+    brillo_fin = (args.brightness_end if args.brightness_end is not None
+                  else args.brightness)
+
+    for vuelta in range(max(1, args.repeat)):
+        if hay_transicion:
+            # Un paso cada 20 ms: por debajo de eso el teclado no responde mas
+            # rapido y solo se gasta tiempo en escrituras al firmware.
+            pasos = max(1, args.length // 20)
+            for i in range(pasos + 1):
+                t = i / pasos
+                pintar(zonas, args.zones,
+                       interpolar(args.color, color_fin, t),
+                       interpolar(args.brightness, brillo_fin, t))
+                time.sleep(args.length / 1000.0 / (pasos + 1))
+        else:
+            pintar(zonas, args.zones, args.color, args.brightness)
+            time.sleep(args.length / 1000.0)
+
+        # Entre repeticiones se apaga, que es lo que hace que se vea parpadear.
+        if vuelta < args.repeat - 1:
+            pintar(zonas, args.zones, (0, 0, 0), 0)
+            time.sleep(espera / 1000.0)
+
+
+def main():
+    zonas = zonas_disponibles()
+    if not zonas:
+        return error(
+            "no encuentro los LEDs del teclado.\n"
+            "       Se esperan en /sys/class/leds/*:kbd_zoned_backlight-*\n"
+            "       ¿Esta cargado el modulo linuwu_sense?")
+
+    argv = sys.argv[1:]
+    analizador = construir_analizador()
+
+    if "--restore-only" in argv:
+        estado = leer_estado(zonas)
+        for ruta, (intensidad, brillo) in zip(zonas, estado["zonas"]):
+            print(f"{os.path.basename(ruta)}: {intensidad} @ {brillo}")
+        print(f"efecto: {estado['efecto'] or 'n/d'}")
+        return 0
+
+    tramos = [analizador.parse_args(t) for t in trocear(argv)]
+
+    # Se guarda antes de tocar nada: es lo que permite que el caso corriente
+    # -avisar y dejarlo como estaba- no necesite un script alrededor.
+    estado = leer_estado(zonas)
+    try:
+        for args in tramos:
+            ejecutar(zonas, args)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if not any(t.keep for t in tramos):
+            restaurar_estado(zonas, estado)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

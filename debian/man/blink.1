@@ -1,0 +1,111 @@
+.TH BLINK 1 "September 2026" "acer-powersave" "User Commands"
+.SH NAME
+blink \- flash the keyboard zones, the way beep flashes the speaker
+.SH SYNOPSIS
+.B blink
+[\fIOPTION\fR]... [\fB\-n\fR [\fIOPTION\fR]...]...
+.SH DESCRIPTION
+Flashes the RGB zones of an Acer Predator or Nitro keyboard. The options
+mirror
+.BR beep (1):
+.B \-l
+is the length of a flash,
+.B \-d
+the gap between repeats,
+.B \-r
+how many times, and
+.B \-n
+starts another flash with its own options. What beep calls a frequency is a
+colour here.
+.PP
+Unless
+.B \-\-keep
+is given, blink saves the keyboard state when it starts and restores it when
+it exits, including an animated effect if one was running. The common case,
+warning the user and leaving things as they were, therefore needs no shell
+scripting around it.
+.PP
+It writes through the standard LED class devices published by the
+linuwu_sense driver, so each zone keeps its own brightness:
+.PP
+.RS
+/sys/class/leds/acer\-wmi:multicolor:kbd_zoned_backlight\-\fIzone\fR
+.RE
+.SH OPTIONS
+.TP
+.BR \-c ", " \-\-color =\fICOLOUR\fR
+Colour of the flash. A name or \fIRRGGBB\fR, with or without a leading hash.
+Default red.
+.TP
+.BR \-C ", " \-\-color\-end =\fICOLOUR\fR
+Fade from \fB\-\-color\fR to this one over the length of the flash.
+.TP
+.BR \-b ", " \-\-brightness =\fI0\-100\fR
+Brightness of the flash. Default 100.
+.TP
+.BR \-B ", " \-\-brightness\-end =\fI0\-100\fR
+Fade the brightness to this value over the flash.
+.TP
+.BR \-z ", " \-\-zones =\fIBITS\fR
+Which zones to light, as binary digits read left to right: \fB1000\fR is the
+leftmost zone, \fB0001\fR the rightmost, \fB1111\fR all of them. Shorter
+strings are padded on the right, so \fB1\fR means the first zone only.
+Default \fB1111\fR.
+.TP
+.BR \-l ", " \-\-length =\fIMS\fR
+Length of each flash in milliseconds. Default 200.
+.TP
+.BR \-d ", " \-\-delay =\fIMS\fR
+Gap between repeats. Defaults to the same as \fB\-\-length\fR.
+.TP
+.BR \-r ", " \-\-repeat =\fIN\fR
+How many times to flash. Default 1.
+.TP
+.BR \-n ", " \-\-new
+Start another flash with its own options, as in beep.
+.TP
+.B \-\-keep
+Leave the last colour on instead of restoring the previous state.
+.TP
+.B \-\-restore\-only
+Print the current state and exit without changing anything.
+.SH EXAMPLES
+Flash red twice on an error and put everything back:
+.PP
+.RS
+.B blink \-c red \-r 2 \-l 150
+.RE
+.PP
+Fade the rightmost zone from green to blue over a second:
+.PP
+.RS
+.B blink \-z 0001 \-c green \-C blue \-l 1000
+.RE
+.PP
+A two-tone alert, as beep would chain two notes:
+.PP
+.RS
+.B blink \-c orange \-l 100 \-n \-c red \-l 300
+.RE
+.PP
+Leave the keyboard dim white, without restoring:
+.PP
+.RS
+.B blink \-c white \-b 20 \-l 0 \-\-keep
+.RE
+.SH EXIT STATUS
+Returns 0 on success, 1 if the LEDs cannot be found or written to.
+.SH PERMISSIONS
+Writing to the LEDs needs membership of the \fBlinuwu_sense\fR group, which a
+udev rule shipped with this package grants on the two writable attributes:
+.PP
+.RS
+.B sudo usermod \-aG linuwu_sense $USER
+.RE
+.PP
+The change takes effect on your next login.
+.SH SEE ALSO
+.BR beep (1),
+.BR acer-powersave (1)
+.SH AUTHOR
+Antonio Orizondo Leyva <aorizondoleyva@gmail.com>
