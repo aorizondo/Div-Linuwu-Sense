@@ -1,50 +1,66 @@
-.TH ACER\-SENSE 1 "2026-09-20" "1.0.0" "Manual del usuario"
-.SH NOMBRE
-acer\-sense \- panel de control para portatiles Acer Predator y Nitro
-.SH SINOPSIS
+.TH ACER\-SENSE 1 "September 2026" "1.0.0" "User Commands"
+.SH NAME
+acer\-sense \- control panel for Acer Predator and Nitro laptops
+.SH SYNOPSIS
 .B acer\-sense
-.SH DESCRIPCION
-Interfaz grafica equivalente a PredatorSense, construida sobre el driver
-linuwu_sense y sobre
+.SH DESCRIPTION
+A PredatorSense\-like interface built on the linuwu_sense driver and on
 .BR power\-profiles\-daemon (8).
 .PP
-Se abre con la tecla dedicada del portatil, que el paquete deja configurada
-durante la instalacion, o desde el menu de aplicaciones.
-.SH SECCIONES
+It opens with the laptop's dedicated key, which the package sets up during
+installation, or from the applications menu.
+.SH PAGES
 .TP
-.B Monitorizacion
-Temperaturas de CPU, GPU, sistema y NVMe, revoluciones de los ventiladores,
-estado de la bateria, consumo y frecuencia de la CPU.
+.B Monitoring
+CPU, GPU, system and NVMe temperatures, fan speed shown as turning blades,
+battery state, power draw and CPU frequency.
 .TP
-.B Ventiladores
-Modo automatico del controlador embebido, velocidad manual por porcentaje con
-lectura de revoluciones, o curva editable: se arrastran los puntos para fijar
-desde que temperatura empiezan a girar y como escalan.
+.B Fans
+The embedded controller's automatic mode, a manual percentage with the real
+speed alongside, or an editable curve: drag the points to set the temperature
+at which the fans start and how steeply they ramp up.
 .TP
-.B Teclado
-Efectos, brillo, velocidad y color de la retroiluminacion, y color fijo para
-cada una de las cuatro zonas.
+.B Keyboard
+Backlight effect, brightness, speed, direction and colour, plus a fixed colour
+per zone. The zones are picked on a drawing of the keyboard rather than from a
+list, so it is clear which one is which.
 .TP
-.B Energia
-Perfil de energia del sistema, tasa de refresco del panel y encendido y apagado
-en caliente de la GPU NVIDIA.
+.B Power
+System power profile, panel refresh rate, and powering the NVIDIA GPU up or
+down while the system is running.
 .TP
-.B Bateria y sistema
-Limite de carga al 80 %, calibracion, carga USB con el equipo apagado, LCD
-override y animacion de arranque.
-.SH LIMITACIONES
-El firmware no expone ajuste fino de frecuencias ni voltajes: lo que Acer llama
-overclocking es el modo Turbo, que solo admite dos estados y se activa con el
-boton fisico del portatil.
+.B Battery and system
+80% charge limit, calibration, USB charging while the machine is off, LCD
+override and boot animation.
+.SH LIMITATIONS
+The firmware exposes no fine\-grained frequency or voltage control: what Acer
+calls overclocking is Turbo mode, which has two states and is triggered by the
+physical button on the laptop.
 .PP
-El tope de carga de la bateria esta fijado en el 80 % por el firmware y no
-admite otro valor.
-.SH PERMISOS
-Los ajustes del driver requieren pertenecer al grupo
-.BR linuwu_sense ,
-al que el paquete anade al usuario que instala. Hay que volver a iniciar sesion
-para que surta efecto.
-.SH VEASE TAMBIEN
-.BR acer\-powersave (1)
-.SH AUTOR
+The battery charge limit is fixed at 80% by the firmware and takes no other
+value.
+.PP
+On the PH315\-53 the firmware answers only five of the eight backlight
+effects. The three it ignores are shown greyed out rather than hidden, so it is
+clear they exist but this machine will not play them.
+.SH PERMISSIONS
+Driver settings need membership of the
+.B linuwu_sense
+group, which the package grants to the installing user. Log out and back in for
+it to take effect.
+.PP
+If the application reports a permission error while you are already in that
+group, the sysfs attributes have lost their ownership, which happens whenever
+the module is reloaded. A udev rule restores it; to fix it by hand without
+logging out:
+.PP
+.nf
+.RS
+sudo systemd\-tmpfiles \-\-create /usr/lib/tmpfiles.d/linuwu\-sense.conf
+.RE
+.fi
+.SH SEE ALSO
+.BR acer\-powersave (1),
+.BR blink (1)
+.SH AUTHOR
 Antonio Orizondo Leyva

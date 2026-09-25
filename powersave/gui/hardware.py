@@ -35,15 +35,45 @@ def _leer(path, defecto=""):
         return defecto
 
 
+def _motivo_sin_permiso(path):
+    """Explica POR QUE no se puede escribir, que son dos casos distintos.
+
+    Decir siempre "anadete al grupo" despista cuando el usuario ya esta en el,
+    que es el caso mas habitual: los atributos de sysfs no sobreviven a una
+    recarga del modulo y el kernel los recrea con root:root, perdiendo el
+    grupo. Pasa al actualizar por DKMS o con un modprobe a mano."""
+    try:
+        import grp
+        en_el_grupo = "linuwu_sense" in (
+            grp.getgrgid(g).gr_name for g in os.getgroups())
+    except (OSError, KeyError, ImportError):
+        en_el_grupo = False
+
+    if not en_el_grupo:
+        return ("sin permiso: tu usuario no esta en el grupo linuwu_sense.\n\n"
+                "  sudo usermod -aG linuwu_sense $USER\n\n"
+                "Hay que volver a iniciar sesion para que surta efecto.")
+
+    try:
+        propietario = grp.getgrgid(Path(path).stat().st_gid).gr_name
+    except (OSError, KeyError):
+        propietario = "?"
+    return (f"sin permiso, aunque ya estas en el grupo linuwu_sense.\n\n"
+            f"El atributo pertenece ahora al grupo '{propietario}': los "
+            f"permisos se pierden cuando se recarga el modulo, porque el "
+            f"kernel recrea el sysfs con root:root.\n\n"
+            f"Se arregla sin reiniciar la sesion:\n"
+            f"  sudo systemd-tmpfiles --create "
+            f"/usr/lib/tmpfiles.d/linuwu-sense.conf")
+
+
 def _escribir(path, valor):
     """Devuelve (ok, mensaje). No lanza: la interfaz muestra el motivo."""
     try:
         Path(path).write_text(str(valor))
         return True, ""
     except PermissionError:
-        return False, ("sin permiso. Anade tu usuario al grupo linuwu_sense "
-                       "y vuelve a iniciar sesion:\n"
-                       "  sudo usermod -aG linuwu_sense $USER")
+        return False, _motivo_sin_permiso(path)
     except OSError as e:
         return False, str(e)
 
@@ -170,27 +200,48 @@ def fan_auto():
 # ---------------------------------------------------------------------------
 #  teclado RGB
 # ---------------------------------------------------------------------------
-#  El primer campo de four_zone_mode NO es un "modo" como dice el README del
-#  proyecto: el firmware lo escribe en KBLE y el valor 0 APAGA la
-#  retroiluminacion. Por eso aqui se llama "efecto" y el cero se trata como
-#  apagado explicito.
-
-# El valor es el que se escribe en el primer campo, que el firmware trata como
-# KBLE. El 0 apaga, asi que el "modo estatico" que el driver numera como 0 es
-# inalcanzable por esta via: para color fijo hay que usar per_zone_mode.
+#  Lo que apaga el teclado es la VELOCIDAD 0, no el efecto 0.
 #
-# Ojo: no todos los efectos responden en todos los firmwares. Verificado en un
-# PH315-53: el 2 funciona. Los que no respondan se marcan al probarlos.
+#  Durante mucho tiempo se creyo lo contrario, porque el driver forzaba
+#  "speed = 0" justo en los dos efectos que no se veian (0 estatico y 1
+#  respiracion) y las dos causas quedaban superpuestas. Al dejar pasar la
+#  velocidad, el efecto estatico aparecio sin mas.
+#
+#  Pero la velocidad 0 NO siempre apaga: congela el efecto. En Respiracion da
+#  un color fijo -- el unico color estatico que tiene este firmware-- mientras
+#  que en Desplazamiento deja el teclado negro. Depende del efecto, asi que se
+#  deja elegir el 0 y se avisa, en vez de prohibirlo.
+#
+#  Para apagar a proposito se usa el brillo, que funciona en todos.
+
+# (nombre, valor, soportado_por_el_firmware)
+#
+# Verificado efecto por efecto en un PH315-53, con brillo 100 y velocidad
+# distinta de cero para que la velocidad no enturbie el resultado:
+#
+#   0  es el efecto ESTATICO, no el apagado. Parecia apagar porque sin zonas
+#      activas el teclado no tiene nada que pintar; con ellas activas muestra
+#      un color fijo por zona. Se aplica escribiendo per_zone_mode, que hace
+#      la secuencia entera (activar zonas, colores, estatico).
+#   6 y 7 llegan con parametros validos y no producen luz. Limitacion del EC
+#      de este modelo, no del driver.
+#
+# El 1 estuvo mucho tiempo en la lista de "no funciona" por un motivo
+# distinto: el driver le forzaba velocidad 0, que apaga. Arreglado eso, va.
 EFECTOS = [
-    ("Apagado", 0),
-    ("Respiracion", 1),
-    ("Neon", 2),
-    ("Onda", 3),
-    ("Desplazamiento", 4),
-    ("Zoom", 5),
-    ("Meteoro", 6),
-    ("Parpadeo", 7),
+    ("Estático", 0, True),
+    ("Respiración", 1, True),
+    ("Neón", 2, True),
+    ("Onda", 3, True),
+    ("Desplazamiento", 4, True),
+    ("Zoom", 5, True),
+    ("Meteoro", 6, False),
+    ("Parpadeo", 7, False),
 ]
+
+# El rango completo que acepta el driver. El 0 es un valor util, no un error:
+# congela la animacion.
+VELOCIDAD_MIN, VELOCIDAD_MAX = 0, 9
 
 
 def kb_disponible():
@@ -212,12 +263,23 @@ def kb_get():
 
 def kb_set(efecto, velocidad, brillo, direccion, rgb):
     r, g, b = rgb
+    velocidad = max(VELOCIDAD_MIN, min(VELOCIDAD_MAX, velocidad))
     return _escribir(KB / "four_zone_mode",
                      f"{efecto},{velocidad},{brillo},{direccion},{r},{g},{b}")
 
 
 def kb_apagar():
-    return kb_set(0, 0, 0, 0, (0, 0, 0))
+    """Apaga bajando el brillo, no con el efecto 0.
+
+    Las dos vias apagan, pero no dan lo mismo: con KBLE a 0 el EC deja de
+    atender las teclas Fn de brillo, y el teclado se queda muerto hasta que
+    algo le escriba un efecto valido. Bajando el brillo se apaga la luz y las
+    teclas siguen respondiendo."""
+    actual = kb_get()
+    if actual is None or not actual["efecto"]:
+        return kb_set(2, 1, 0, 1, (0, 0, 0))
+    return kb_set(actual["efecto"], actual["velocidad"], 0,
+                  actual["direccion"], actual["rgb"])
 
 
 def kb_zonas_get():
