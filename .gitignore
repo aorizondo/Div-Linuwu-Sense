@@ -15,6 +15,7 @@ src/.*.cmd
 # artefactos de dpkg-buildpackage
 debian/linuwu-sense-dkms/
 debian/acer-powersave/
+debian/acer-sense/
 debian/.debhelper/
 debian/debhelper-build-stamp
 debian/files
@@ -22,3 +23,7 @@ debian/*.substvars
 debian/*.debhelper
 debian/*.debhelper.log
 debian/tmp/
+
+# bytecode de Python
+__pycache__/
+*.pyc

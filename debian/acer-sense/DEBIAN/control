@@ -3,26 +3,24 @@ Source: linuwu-sense
 Version: 1.0.0
 Architecture: all
 Maintainer: Antonio Orizondo Leyva <aorizondoleyva@gmail.com>
-Installed-Size: 86
+Installed-Size: 117
 Depends: python3:any, python3-pyqt6, acer-powersave (= 1.0.0)
-Recommends: linuwu-sense-dkms
 Section: kernel
 Priority: optional
 Homepage: https://github.com/aorizondo/Div-Linuwu-Sense
-Description: panel de control grafico para portatiles Acer Predator y Nitro
- Interfaz grafica equivalente a PredatorSense, construida sobre el driver
- linuwu_sense y sobre power-profiles-daemon.
+Description: graphical control panel for Acer Predator and Nitro laptops
+ A PredatorSense-like interface built on the linuwu_sense driver and on
+ power-profiles-daemon. It needs acer-powersave, which provides the hardware
+ layer and the kernel driver.
  .
- Incluye:
-  * monitorizacion en vivo de temperaturas, revoluciones de los ventiladores,
-    consumo y estado de la CPU;
-  * control de ventiladores automatico, manual o por curva editable, con la
-    temperatura a la que empiezan a girar y como escalan;
-  * retroiluminacion del teclado: efectos, brillo, color y color fijo por cada
-    una de las cuatro zonas;
-  * perfiles de energia, tasa de refresco del panel y encendido y apagado en
-    caliente de la GPU NVIDIA;
-  * limite de carga de la bateria, calibracion y ajustes del firmware.
+ Includes:
+  * live monitoring of temperatures, fan speed, power draw and CPU state;
+  * fan control: automatic, manual, or an editable curve where you set the
+    temperature at which the fans start and how steeply they ramp up;
+  * keyboard backlight: effects, speed, direction, brightness, and a fixed
+    colour per zone on four-zone keyboards;
+  * power profiles, panel refresh rate, and hot plug of the NVIDIA GPU;
+  * battery charge limit, calibration and firmware settings.
  .
- Se abre con la tecla dedicada del portatil (PredatorSense en los Predator, la
- tecla N en los Nitro), que el paquete deja configurada.
+ It opens with the laptop's dedicated key (PredatorSense on Predator models,
+ the N key on Nitro), which this package sets up for you.

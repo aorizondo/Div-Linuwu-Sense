@@ -24,10 +24,12 @@ override_dh_dkms:
 execute_before_dh_installsystemd:
 	cp powersave/systemd/acer-powersave.service debian/acer-powersave.service
 	cp powersave/systemd/acer-powersave-session.service debian/acer-powersave.user.service
+	cp powersave/systemd/acer-nvidia-arranque.service debian/acer-powersave.acer-nvidia-arranque.service
 
 override_dh_installsystemd:
 	dh_installsystemd -plinuwu-sense-dkms --name=linuwu-sense
 	dh_installsystemd -pacer-powersave
+	dh_installsystemd -pacer-powersave --name=acer-nvidia-arranque
 
 override_dh_installsystemduser:
 	dh_installsystemduser -pacer-powersave --name=acer-powersave-session

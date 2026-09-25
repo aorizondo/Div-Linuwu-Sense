@@ -11,6 +11,13 @@ case "$1" in
         ;;
 esac
 
+case "$1" in
+    purge)
+        # Marcas de update-grub / update-initramfs: sin valor fuera del paquete.
+        rm -rf /var/lib/acer-powersave
+        ;;
+esac
+
 #DEBHELPER#
 
 exit 0

@@ -1,4 +1,5 @@
 powersave/acer-powersave          usr/bin/
+powersave/blink                   usr/bin/
 powersave/acer-powersave-session  usr/bin/
 powersave/profiles.conf           etc/acer-powersave/
 powersave/grub/50-acer-powersave.cfg  etc/default/grub.d/

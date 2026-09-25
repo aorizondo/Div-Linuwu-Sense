@@ -4,11 +4,10 @@ Documentation=https://github.com/aorizondo/Div-Linuwu-Sense
 After=dbus.service power-profiles-daemon.service
 # Sin Wants= a proposito: junto con After= formaba un ciclo de ordenacion que
 # systemd rompia descartando el job de arranque, de modo que el servicio no
-# llegaba a ejecutarse nunca ("Job acer-powersave.service/stop deleted to break
-# ordering cycle starting with power-profiles-daemon.service/stop").
+# llegaba a ejecutarse nunca.
 #
 # No hace falta: si PPD no esta, el daemon lo detecta (usa DO_NOT_AUTO_START)
-# y sale limpiamente.
+# y sale; Restart=on-failure se encarga de reintentarlo.
 #
 # Sin PartOf: interesa seguir vivo aunque PPD se reinicie.
 
@@ -36,4 +35,24 @@ SystemCallArchitectures=native
 ReadWritePaths=/sys/devices /sys/bus /sys/module /sys/class
 
 [Install]
-WantedBy=multi-user.target
+# graphical.target, NO multi-user.target, y el motivo es un ciclo de
+# ordenacion que no se ve a simple vista:
+#
+#   power-profiles-daemon declara "After=multi-user.target display-manager.target"
+#   y se instala en graphical.target.
+#
+# Con WantedBy=multi-user.target el grafo se cerraba sobre si mismo:
+#
+#   multi-user.target -(wants)-> acer-powersave      (y un target va DESPUES
+#                                                     de lo que lo quiere)
+#   acer-powersave    -(after)-> power-profiles-daemon
+#   power-profiles-daemon -(after)-> multi-user.target
+#
+# systemd lo rompia descartando nuestro job ("Found ordering cycle on
+# acer-powersave.service/start"), asi que el daemon NO arrancaba en el inicio;
+# solo parecia funcionar porque dpkg lo levantaba al instalar el paquete, y el
+# sintoma reaparecia en el siguiente reinicio.
+#
+# Un consumidor de PPD no puede vivir en un target anterior a PPD. En
+# graphical.target el orden queda: multi-user -> PPD -> acer-powersave.
+WantedBy=graphical.target

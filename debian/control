@@ -23,19 +23,23 @@ Recommends:
 Conflicts: linuwu-sense
 Replaces: linuwu-sense
 Provides: linuwu-sense-kernel
-Description: driver WMI para portatiles Acer Predator y Nitro (fuente DKMS)
- linuwu_sense sustituye al driver acer_wmi incluido en el kernel y anade las
- funciones que la version del kernel no expone en portatiles Acer de la gama
- gaming: control de ventiladores, perfiles termicos con modo Turbo, limitador
- de carga de bateria al 80 %, calibracion de bateria, retroiluminacion RGB de
- cuatro zonas, LCD override y carga USB con el equipo apagado.
+Description: WMI driver for Acer Predator and Nitro laptops (DKMS source)
+ linuwu_sense replaces the in-kernel acer_wmi driver and adds what the kernel
+ version does not expose on Acer gaming laptops: fan control, thermal profiles
+ with Turbo mode, an 80% battery charge limiter, battery calibration,
+ four-zone RGB keyboard backlight, LCD override, and USB charging while the
+ machine is off.
  .
- El modulo se compila en la propia maquina mediante DKMS, de forma que se
- reconstruye solo con cada actualizacion del kernel.
+ The module is built on your own machine through DKMS, so it is rebuilt
+ automatically on every kernel upgrade.
  .
- Este paquete es un fork de Div-Linuwu-Sense que anade compatibilidad con la
- API platform_profile de los kernels anteriores a 6.13 (como el 6.12 LTS de
- Debian 13) y completa el quirk del Predator PH315-53.
+ This is a fork of Div-Linuwu-Sense that adds compatibility with the
+ platform_profile API of kernels older than 6.13 (such as the 6.12 LTS in
+ Debian 13), completes the Predator PH315-53 quirk, and fixes four-zone RGB so
+ that per-zone colours actually light up.
+ .
+ You do not normally install this package by hand: acer-powersave depends on
+ it.
 
 Package: acer-powersave
 Architecture: all
@@ -45,30 +49,37 @@ Depends:
  python3-gi,
  gir1.2-glib-2.0,
  power-profiles-daemon,
+ linuwu-sense-dkms (= ${binary:Version}),
 Recommends:
- linuwu-sense-dkms,
  libkf6screen-bin | kscreen,
 Suggests:
  powertop,
 Conflicts: tlp, auto-cpufreq, tuned
-Description: ajustes de energia para portatiles Acer Predator y Nitro
- Aplica automaticamente los ajustes de energia que corresponden al perfil
- activo de power-profiles-daemon, sin mantener estado propio en disco: el
- perfil de PPD es la unica fuente de verdad. En KDE, PowerDevil ya traduce
- conectado y bateria a perfil, de modo que esto sigue al cable y respeta
- ademas el cambio manual del usuario.
+Description: hardware and power management for Acer Predator and Nitro laptops
+ Everything that talks to the hardware: power profiles, keyboard backlight,
+ fans, battery and the discrete GPU. It pulls in the linuwu_sense kernel
+ driver, so this one package is enough for a working machine without any
+ graphical interface. Install acer-sense on top if you want one.
  .
- Incluye:
-  * gobernador, EPP y turbo de la CPU por perfil;
-  * tasa de refresco del panel por perfil, mediante un servicio de sesion
-    (Plasma no trae esta funcion: PowerDevil no gestiona la configuracion de
-    pantalla);
-  * encendido y apagado en caliente de la GPU NVIDIA Optimus, sin reiniciar y
-    sin necesidad de envycontrol;
-  * curva de ventiladores con histeresis, si esta el modulo linuwu_sense;
-  * medicion de consumo en reposo con descarte de muestras con actividad.
+ Power profiles follow power-profiles-daemon and keep no state of their own on
+ disk: the active PPD profile is the single source of truth. Under KDE,
+ PowerDevil already maps AC and battery to a profile, so this follows the
+ mains cable and still honours a manual override.
  .
- No toca el brillo de la pantalla ni la retroiluminacion del teclado.
+ Includes:
+  * CPU governor, EPP and turbo per profile, undoing the fixed frequency cap
+    PPD applies in power-saver (measured on a PH315-53, that cap costs 3.3x
+    more energy for the same work);
+  * panel refresh rate per profile through a session service, which Plasma
+    does not offer (PowerDevil does not manage display configuration);
+  * hot plug and unplug of the NVIDIA Optimus GPU, with no reboot and without
+    needing envycontrol;
+  * keyboard backlight brightness on the Fn keys, corrected so the bottom of
+    the range switches the light off instead of jumping back to maximum;
+  * fan curve with hysteresis;
+  * idle power measurement that discards samples taken under load.
+ .
+ It does not touch screen brightness.
 
 Package: acer-sense
 Architecture: all
@@ -77,22 +88,19 @@ Depends:
  ${python3:Depends},
  python3-pyqt6,
  acer-powersave (= ${binary:Version}),
-Recommends:
- linuwu-sense-dkms,
-Description: panel de control grafico para portatiles Acer Predator y Nitro
- Interfaz grafica equivalente a PredatorSense, construida sobre el driver
- linuwu_sense y sobre power-profiles-daemon.
+Description: graphical control panel for Acer Predator and Nitro laptops
+ A PredatorSense-like interface built on the linuwu_sense driver and on
+ power-profiles-daemon. It needs acer-powersave, which provides the hardware
+ layer and the kernel driver.
  .
- Incluye:
-  * monitorizacion en vivo de temperaturas, revoluciones de los ventiladores,
-    consumo y estado de la CPU;
-  * control de ventiladores automatico, manual o por curva editable, con la
-    temperatura a la que empiezan a girar y como escalan;
-  * retroiluminacion del teclado: efectos, brillo, color y color fijo por cada
-    una de las cuatro zonas;
-  * perfiles de energia, tasa de refresco del panel y encendido y apagado en
-    caliente de la GPU NVIDIA;
-  * limite de carga de la bateria, calibracion y ajustes del firmware.
+ Includes:
+  * live monitoring of temperatures, fan speed, power draw and CPU state;
+  * fan control: automatic, manual, or an editable curve where you set the
+    temperature at which the fans start and how steeply they ramp up;
+  * keyboard backlight: effects, speed, direction, brightness, and a fixed
+    colour per zone on four-zone keyboards;
+  * power profiles, panel refresh rate, and hot plug of the NVIDIA GPU;
+  * battery charge limit, calibration and firmware settings.
  .
- Se abre con la tecla dedicada del portatil (PredatorSense en los Predator, la
- tecla N en los Nitro), que el paquete deja configurada.
+ It opens with the laptop's dedicated key (PredatorSense on Predator models,
+ the N key on Nitro), which this package sets up for you.

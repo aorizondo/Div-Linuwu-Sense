@@ -1,13 +1,44 @@
 #!/bin/sh
 set -e
 
+# update-grub y update-initramfs tardan minutos, y lo que los hace falta son
+# dos ficheros de configuracion que casi nunca cambian. Reinstalar el paquete
+# por un cambio en un script de Python no tiene por que pagar ese precio, asi
+# que se guarda la huella de cada fichero y solo se regenera cuando cambia.
+MARCAS=/var/lib/acer-powersave
+
+# $1 = fichero de configuracion, $2 = nombre de la marca, $3 = orden a ejecutar
+regenerar_si_cambio() {
+    fichero="$1"; marca="$MARCAS/$2.md5"; orden="$3"
+    [ -e "$fichero" ] || return 0
+    actual=$(md5sum "$fichero" | cut -d' ' -f1)
+    [ "$(cat "$marca" 2>/dev/null)" = "$actual" ] && return 0
+    echo "acer-powersave: $fichero ha cambiado, ejecutando $orden..."
+    if $orden; then
+        mkdir -p "$MARCAS"
+        echo "$actual" > "$marca"
+    else
+        echo "acer-powersave: $orden fallo; revisa $fichero" >&2
+    fi
+}
+
 case "$1" in
     configure)
         # El drop-in de /etc/default/grub.d/ solo surte efecto tras regenerar
         # la configuracion de GRUB. No se toca /etc/default/grub del usuario.
         if command -v update-grub >/dev/null && [ -d /boot/grub ]; then
-            echo "acer-powersave: regenerando la configuracion de GRUB..."
-            update-grub || echo "acer-powersave: update-grub fallo; revisa /etc/default/grub.d/50-acer-powersave.cfg" >&2
+            regenerar_si_cambio /etc/default/grub.d/50-acer-powersave.cfg \
+                                grub update-grub
+        fi
+
+        # zz-nvidia-debian.conf tiene que llegar al initramfs. El driver de
+        # NVIDIA se carga ahi, antes de que se monte la raiz, y el initramfs
+        # lleva una copia CONGELADA de /etc/modprobe.d: sin esto, ni el
+        # blacklist ni las opciones del modulo surten efecto, y el sintoma es
+        # mudo (modeset se queda en N y la tarjeta se carga igual).
+        if command -v update-initramfs >/dev/null; then
+            regenerar_si_cambio /etc/modprobe.d/zz-nvidia-debian.conf \
+                                initramfs "update-initramfs -u"
         fi
         ;;
 esac

@@ -20,8 +20,10 @@ Lo que NO hace este servicio:
 
 import configparser
 import os
+import struct
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -42,6 +44,28 @@ NVIDIA_GPU = "0000:01:00.0"   # la funcion VGA
 NVIDIA_FUNCS = ("0000:01:00.3", "0000:01:00.2", "0000:01:00.1", "0000:01:00.0")
 FAN_SYS = Path("/sys/module/linuwu_sense/drivers/platform:acer-wmi/acer-wmi"
                "/predator_sense/fan_speed")
+
+# Retroiluminacion RGB de cuatro zonas. El formato de four_zone_mode es
+# "modo,velocidad,brillo,rojo,verde,azul,direccion".
+KB_MODE = Path("/sys/devices/platform/acer-wmi/four_zoned_kb/four_zone_mode")
+KB_BRILLO_CAMPO = 2
+# Escalones de brillo, apagado incluido. El 0 es el motivo de todo esto: el
+# firmware no lo ofrece, da la vuelta al maximo.
+#
+# De 10 en 10: con saltos de 25 la escala entera eran cuatro pulsaciones y no
+# habia forma de afinar. Once escalones se recorren igual de rapido dejando la
+# tecla pulsada, porque el antirrebote de abajo limita el ritmo, no el numero.
+KB_NIVELES = tuple(range(0, 101, 10))
+# Scancodes que emite el teclado AT para Fn+F10 y Fn+F9. Se escuchan en crudo
+# en vez de mapearlos a KEY_KBDILLUMUP/DOWN a proposito: mapearlos meteria a
+# KDE en la ecuacion (intentaria gobernar un /sys/class/leds/*kbd_backlight*
+# que en este equipo NO EXISTE) y ya hay dos sistemas de sobra en juego.
+KB_SCAN_SUBIR = 0xEF
+KB_SCAN_BAJAR = 0xF0
+# Dos pulsaciones mas juntas que esto son autorepeat del firmware, no
+# intencion del usuario. Sin este filtro, mantener la tecla barre la escala
+# entera en medio segundo.
+KB_ANTIREBOTE = 0.25
 
 
 def log(msg):
@@ -77,6 +101,129 @@ def read_first(path, default=""):
         return Path(path).read_text().strip()
     except OSError:
         return default
+
+
+# --------------------------------------------------------------------------
+#  Retroiluminacion del teclado
+# --------------------------------------------------------------------------
+#
+# El problema que resuelve esto: en este equipo hay DOS sistemas tocando el
+# brillo del teclado y no se hablan entre ellos.
+#
+#   - El EC (firmware) reacciona a Fn+F9/F10 por su cuenta, sin pasar por
+#     Linux, y al llegar al minimo da la vuelta al MAXIMO en vez de apagar.
+#   - linuwu_sense mantiene su propio estado, que nunca se sincroniza con el
+#     EC: comprobado pulsando la tecla unas 40 veces seguidas, con el brillo
+#     real cambiando a la vista, mientras four_zone_mode seguia clavado en
+#     "2,0,80,0,0,0,0" de principio a fin.
+#
+# No se puede impedir que el EC actue, pero si corregirlo despues: los
+# scancodes SI llegan a /dev/input, y escribir four_zone_mode tiene la ultima
+# palabra sobre el hardware (verificado: apagado, maximo, apagado y medio,
+# obedecidos los cuatro). Asi que se escucha la tecla, se lleva la cuenta del
+# nivel aqui y se reescribe el brillo detras del EC.
+#
+# El efecto util es el escalon que faltaba: el 0. Bajando se llega a apagado y
+# ahi se queda, en lugar de saltar al maximo.
+
+def _teclado_at():
+    """Ruta del evdev del teclado interno, o None.
+
+    Se busca por nombre en vez de fijar /dev/input/event0 porque la
+    numeracion depende del orden de enumeracion y puede cambiar."""
+    try:
+        bloques = Path("/proc/bus/input/devices").read_text().split("\n\n")
+    except OSError:
+        return None
+    for b in bloques:
+        if 'Name="AT Translated Set 2 keyboard"' not in b:
+            continue
+        for palabra in b.split():
+            if palabra.startswith("event"):
+                return Path("/dev/input") / palabra
+    return None
+
+
+def _kb_campos():
+    """four_zone_mode como lista de enteros, o None si no se puede leer."""
+    try:
+        return [int(x) for x in KB_MODE.read_text().strip().split(",")]
+    except (OSError, ValueError):
+        return None
+
+
+def _kb_poner_brillo(nivel):
+    campos = _kb_campos()
+    if campos is None or len(campos) <= KB_BRILLO_CAMPO:
+        return False
+    campos[KB_BRILLO_CAMPO] = nivel
+    return write_sysfs(KB_MODE, ",".join(str(c) for c in campos))
+
+
+def _kb_nivel_mas_cercano(valor):
+    """El escalon al que corresponde un brillo cualquiera.
+
+    Hace falta porque el punto de partida no tiene por que ser uno de los
+    nuestros: puede venir del EC, de la interfaz grafica o del estado que el
+    driver restaura al cargarse."""
+    return min(range(len(KB_NIVELES)),
+               key=lambda i: abs(KB_NIVELES[i] - valor))
+
+
+def escuchar_backlight_teclado():
+    """Bucle que corrige el brillo del teclado por detras del EC.
+
+    Pensado para vivir en un hilo daemon: si algo falla se registra y se
+    abandona la vigilancia, sin tumbar el servicio."""
+    dispositivo = _teclado_at()
+    if dispositivo is None or not dispositivo.exists():
+        log("backlight del teclado: no se encontro el teclado interno")
+        return
+    campos = _kb_campos()
+    if campos is None:
+        log("backlight del teclado: four_zone_mode no disponible, sin vigilancia")
+        return
+
+    indice = _kb_nivel_mas_cercano(campos[KB_BRILLO_CAMPO])
+    log(f"backlight del teclado: vigilando {dispositivo}, "
+        f"nivel inicial {KB_NIVELES[indice]}%")
+
+    # struct input_event: dos campos de tiempo del tamano de un long, y
+    # despues tipo, codigo y valor.
+    FORMATO = "llHHi"
+    TAM = struct.calcsize(FORMATO)
+    EV_MSC, MSC_SCAN = 0x04, 0x04
+    ultima = 0.0
+
+    try:
+        with open(dispositivo, "rb", buffering=0) as f:
+            while True:
+                datos = f.read(TAM)
+                if not datos or len(datos) < TAM:
+                    break
+                _, _, tipo, codigo, valor = struct.unpack(FORMATO, datos)
+                if tipo != EV_MSC or codigo != MSC_SCAN:
+                    continue
+                if valor not in (KB_SCAN_SUBIR, KB_SCAN_BAJAR):
+                    continue
+
+                ahora = time.monotonic()
+                if ahora - ultima < KB_ANTIREBOTE:
+                    continue
+                ultima = ahora
+
+                if valor == KB_SCAN_BAJAR:
+                    # Sin dar la vuelta: abajo del todo es apagado, y ahi se
+                    # queda. Es justo lo que el firmware se niega a hacer.
+                    indice = max(0, indice - 1)
+                else:
+                    indice = min(len(KB_NIVELES) - 1, indice + 1)
+
+                # El EC ya ha aplicado lo suyo cuando llegamos aqui; esta
+                # escritura va detras, y es la que se queda.
+                _kb_poner_brillo(KB_NIVELES[indice])
+    except OSError as e:
+        log(f"backlight del teclado: se abandona la vigilancia ({e})")
 
 
 # --------------------------------------------------------------------------
@@ -174,10 +321,24 @@ def gpu_on():
         return False
     log(f"  dGPU: presente en el bus tras {espera:.1f} s")
 
-    for name in ("nvidia-current", "nvidia"):
-        r = subprocess.run(["modprobe", name], capture_output=True, text=True)
+    # Se carga el modulo DRM y no el base: arrastra a los otros tres como
+    # dependencias y es el unico al que tiene sentido pasarle modeset.
+    #
+    # modeset=1 va en la linea de ordenes a proposito, no en modprobe.d. El
+    # nombre que indexa modprobe en Debian es el del fichero
+    # (nvidia-current-drm), pero las herramientas al uso escriben
+    # "options nvidia-drm ...", que es el nombre INTERNO del modulo, y la
+    # opcion se pierde sin dar ningun error: el sintoma es que
+    # /sys/module/nvidia_drm/parameters/modeset se queda en N. Pasandolo aqui
+    # no hay ambiguedad posible.
+    #
+    # Sin modeset no hay conectores de video, y en este equipo el HDMI cuelga
+    # de la dGPU, no de la Intel.
+    for name in ("nvidia-current-drm", "nvidia-drm"):
+        r = subprocess.run(["modprobe", name, "modeset=1"],
+                           capture_output=True, text=True)
         if r.returncode == 0:
-            log(f"  dGPU: encendida, modulo {name} cargado")
+            log(f"  dGPU: encendida, modulo {name} cargado con modeset=1")
             break
     else:
         log("  dGPU: presente en el bus pero no se pudo cargar el driver")
@@ -193,10 +354,64 @@ def gpu_on():
 #  Aplicacion de un perfil
 # --------------------------------------------------------------------------
 
+def opcion(cfg, seccion, clave, clave_antigua=None, **kw):
+    """Lee una clave de configuracion aceptando tambien su nombre anterior.
+
+    Los nombres pasaron de castellano a ingles cuando el paquete se preparo
+    para publicarse. Un profiles.conf antiguo es un fichero de configuracion
+    del usuario: dpkg lo conserva, asi que hay que seguir entendiendolo.
+    """
+    tipo = kw.pop("tipo", "str")
+    lector = {"str": cfg.get, "int": cfg.getint, "bool": cfg.getboolean}[tipo]
+    for sec in (seccion, kw.pop("seccion_antigua", None)):
+        if not sec or not cfg.has_section(sec):
+            continue
+        for k in (clave, clave_antigua):
+            if k and cfg.has_option(sec, k):
+                return lector(sec, k)
+    return kw.get("fallback")
+
+
 def leer_config():
     cp = configparser.ConfigParser()
     cp.read(CONFIG)
     return cp
+
+
+# Lo pone cmd_daemon(). Fuera del servicio no hay bucle de GLib al que
+# encolar nada, y programar un timeout seria un error silencioso.
+_en_daemon = False
+
+
+def liberar_frecuencia_si_clavada():
+    """Deshace el recorte de frecuencia que deja PPD en power-saver.
+
+    power-profiles-daemon 0.30, con CpuDriver intel_pstate, implementa su
+    perfil de ahorro fijando scaling_max_freq al MINIMO del hardware, ademas
+    de poner el EPP. Comprobado parando este servicio y haciendo la transicion
+    a mano: balanced deja max=5000000 y power-saver lo baja a 800000.
+
+    En este equipo eso sale caro: medido, la CPU tarda 3,25 veces mas en la
+    misma tarea y gasta 3,3 veces mas energia, porque pasa mucho menos tiempo
+    en reposo profundo. El EPP por si solo ya mantiene las frecuencias bajas
+    cuando no hay trabajo, que es lo que se quiere; el tope rigido solo impide
+    despachar rapido y volver a dormir.
+
+    Se reconoce por min == max: ningun ajuste legitimo deja los dos limites
+    pegados, asi que fuera de ese caso no se toca nada.
+
+    Devuelve False siempre, para que GLib no repita el temporizador.
+    """
+    cur_min = read_first(CPU / "cpu0/cpufreq/scaling_min_freq")
+    cur_max = read_first(CPU / "cpu0/cpufreq/scaling_max_freq")
+    hw_min = read_first(CPU / "cpu0/cpufreq/cpuinfo_min_freq")
+    hw_max = read_first(CPU / "cpu0/cpufreq/cpuinfo_max_freq")
+
+    if cur_min and cur_max and cur_min == cur_max and hw_min and hw_max:
+        log(f"  frecuencia clavada en {cur_min} kHz, liberando a {hw_min}-{hw_max}")
+        write_all("cpu*/cpufreq/scaling_max_freq", hw_max)
+        write_all("cpu*/cpufreq/scaling_min_freq", hw_min)
+    return False
 
 
 def aplicar(perfil, cfg):
@@ -246,10 +461,22 @@ def aplicar(perfil, cfg):
     hw_min = read_first(CPU / "cpu0/cpufreq/cpuinfo_min_freq")
     hw_max = read_first(CPU / "cpu0/cpufreq/cpuinfo_max_freq")
 
-    if cur_min and cur_max and cur_min == cur_max and hw_min and hw_max:
-        log(f"  frecuencia clavada en {cur_min} kHz, liberando a {hw_min}-{hw_max}")
-        write_all("cpu*/cpufreq/scaling_max_freq", hw_max)
-        write_all("cpu*/cpufreq/scaling_min_freq", hw_min)
+    if s.getboolean("unpin_cpu_freq",
+                    fallback=s.getboolean("liberar_frecuencia", fallback=True)):
+        liberar_frecuencia_si_clavada()
+        # Y otra vez mas tarde, porque aqui llegamos DEMASIADO PRONTO.
+        #
+        # PPD emite PropertiesChanged y sigue escribiendo despues: cuando esta
+        # llamada lee scaling_max_freq, el recorte todavia no esta puesto y no
+        # hay nada que deshacer. El sintoma era exacto: el log decia "perfil ->
+        # power-saver" sin la linea de "frecuencia clavada", y la CPU se
+        # quedaba a 800 MHz igualmente.
+        #
+        # Dos reintentos en vez de uno: no hay forma de saber cuanto tarda PPD
+        # y reintentar es barato (leer cuatro ficheros de sysfs).
+        if _en_daemon:
+            for retardo in (2, 6):
+                GLib.timeout_add_seconds(retardo, liberar_frecuencia_si_clavada)
 
     # En modo ACTIVO, PPD implementa sus perfiles justamente con el governor y
     # el EPP, asi que tocarlos aqui es pelearse con el por el mismo fichero.
@@ -321,7 +548,8 @@ excluir_usb = set()
 def cargar_excluir(cfg):
     global excluir_usb
     excluir_usb = {x.strip() for x in
-                   cfg.get("general", "excluir_usb", fallback="").split(",")
+                   (opcion(cfg, "general", "exclude_usb", "excluir_usb",
+                           fallback="") or "").split(",")
                    if x.strip()}
 
 
@@ -335,8 +563,18 @@ def potencia_mw():
 
 
 def cmd_daemon(_args):
+    global _en_daemon
+    _en_daemon = True
+
     cfg = leer_config()
     cargar_excluir(cfg)
+
+    # La retroiluminacion del teclado no tiene nada que ver con el perfil de
+    # energia, asi que se vigila en su propio hilo en vez de meterla en el
+    # bucle de D-Bus. Es un hilo daemon: no impide que el servicio termine.
+    threading.Thread(target=escuchar_backlight_teclado,
+                     name="backlight-teclado", daemon=True).start()
+
     try:
         proxy = Gio.DBusProxy.new_for_bus_sync(
             Gio.BusType.SYSTEM,
@@ -404,7 +642,7 @@ def cmd_status(_args):
 def cmd_medir(args):
     """Mediana de muestras en reposo. Descarta las muestras con la CPU
     ocupada, para que comparar dos configuraciones tenga sentido."""
-    dur, umbral = args.segundos, 12
+    dur, umbral = getattr(args, 'seconds', getattr(args, 'segundos', 30)), 12
     muestras, descartadas = [], 0
 
     def cpu_tick():
@@ -457,11 +695,14 @@ def cmd_fan(args):
         return 1
 
     cfg = leer_config()
-    t0 = cfg.getint("ventiladores", "temp_minima", fallback=40)
-    hist = cfg.getint("ventiladores", "histeresis", fallback=3)
+    t0 = opcion(cfg, "fans", "min_temp", "temp_minima",
+                tipo="int", seccion_antigua="ventiladores", fallback=40)
+    hist = opcion(cfg, "fans", "hysteresis", "histeresis",
+                  tipo="int", seccion_antigua="ventiladores", fallback=3)
     curva = []
-    for par in cfg.get("ventiladores", "curva",
-                       fallback="50:20,60:35,70:55,80:75,99:100").split(","):
+    for par in opcion(cfg, "fans", "curve", "curva",
+                      seccion_antigua="ventiladores",
+                      fallback="50:20,60:35,70:55,80:75,99:100").split(","):
         lim, pct = par.split(":")
         curva.append((int(lim), int(pct)))
     curva.sort()
@@ -502,10 +743,14 @@ def cmd_guardar_curva(args):
     import configparser
     cp = configparser.ConfigParser()
     cp.read(CONFIG)
-    if not cp.has_section("ventiladores"):
-        cp.add_section("ventiladores")
-    cp.set("ventiladores", "temp_minima", str(args.temp_minima))
-    cp.set("ventiladores", "curva", args.curva)
+    if not cp.has_section("fans"):
+        cp.add_section("fans")
+    cp.set("fans", "min_temp", str(args.temp_minima))
+    cp.set("fans", "curve", args.curva)
+    # Si venia de una version anterior, la seccion antigua se queda con los
+    # valores viejos y ganaria en la siguiente lectura. Se retira.
+    if cp.has_section("ventiladores"):
+        cp.remove_section("ventiladores")
     try:
         os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
         with open(CONFIG, "w") as f:
@@ -522,25 +767,34 @@ def main():
     import argparse
     ap = argparse.ArgumentParser(
         prog="acer-powersave",
-        description="Ajustes de energia para Acer Predator/Nitro")
+        description="Hardware and power management for Acer Predator/Nitro")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    sub.add_parser("daemon", help="seguir el perfil de power-profiles-daemon")
-    sub.add_parser("status", help="estado actual del sistema")
-    m = sub.add_parser("medir", help="consumo mediano en reposo")
-    m.add_argument("segundos", nargs="?", type=int, default=30)
-    g = sub.add_parser("gpu", help="encender o apagar la dGPU en caliente")
-    g.add_argument("estado", choices=["on", "off"])
-    sub.add_parser("fan", help="aplicar la curva de ventiladores")
-    gc = sub.add_parser("guardar-curva",
-                        help="escribir la curva en la configuracion")
-    gc.add_argument("temp_minima", type=int)
-    gc.add_argument("curva", help="pares temperatura:porcentaje separados por comas")
+    # Los nombres en castellano se conservan como alias: la version anterior
+    # los usaba, y la accion de polkit y cualquier script del usuario los
+    # invocan por su nombre. Romperlos por una traduccion seria gratuito.
+    sub.add_parser("daemon", help="follow the power-profiles-daemon profile")
+    sub.add_parser("status", help="current state of the system")
+    m = sub.add_parser("measure", aliases=["medir"],
+                       help="median idle power draw")
+    m.add_argument("seconds", nargs="?", type=int, default=30)
+    g = sub.add_parser("gpu", help="power the discrete GPU up or down")
+    g.add_argument("estado", choices=["on", "off"], metavar="on|off")
+    sub.add_parser("fan", help="apply the fan curve")
+    gc = sub.add_parser("save-curve", aliases=["guardar-curva"],
+                        help="write the fan curve to the configuration")
+    gc.add_argument("temp_minima", type=int, metavar="MIN_TEMP")
+    gc.add_argument("curva", metavar="CURVE",
+                    help="temperature:percentage pairs, comma separated")
 
     args = ap.parse_args()
-    return {"daemon": cmd_daemon, "status": cmd_status, "medir": cmd_medir,
-            "gpu": cmd_gpu, "fan": cmd_fan,
-            "guardar-curva": cmd_guardar_curva}[args.cmd](args)
+    ordenes = {
+        "daemon": cmd_daemon, "status": cmd_status,
+        "measure": cmd_medir, "medir": cmd_medir,
+        "gpu": cmd_gpu, "fan": cmd_fan,
+        "save-curve": cmd_guardar_curva, "guardar-curva": cmd_guardar_curva,
+    }
+    return ordenes[args.cmd](args)
 
 
 if __name__ == "__main__":

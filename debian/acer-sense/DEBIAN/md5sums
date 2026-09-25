@@ -1,10 +1,10 @@
 bb94c6a809ad8e555d0ec53468664516  usr/lib/udev/hwdb.d/61-acer-sense-key.hwdb
-9bb9e1110089b76891a159ee30f47b9d  usr/share/acer-sense/acer-sense
-18abeecec1d4af009e8f7c3f6df9bf17  usr/share/acer-sense/hardware.py
-252c9dcd6cecd707b7bcc438f86c465d  usr/share/acer-sense/widgets.py
+3f48add598629957dbad68c2f975f0af  usr/share/acer-sense/acer-sense
+78bdb4d87f8985da792a691298c0c970  usr/share/acer-sense/hardware.py
+50181af675d80f3f3bf6b18b810aa39f  usr/share/acer-sense/widgets.py
 3ad4fcba7121127a2166410e9fe38fbf  usr/share/applications/acer-sense.desktop
 1f6640228ba53cfdfbca902b6e9088f2  usr/share/doc/acer-sense/changelog.gz
 7347d234fb2dda7ece5386d9834af1cc  usr/share/doc/acer-sense/copyright
 c3575175bfe773fe4e795bb733d450c1  usr/share/icons/hicolor/scalable/apps/acer-sense.svg
-bf8757cb3a7a62adbf130e8d0657c197  usr/share/man/man1/acer-sense.1.gz
+091d315dbd3ff3461800ebb9e4664ce0  usr/share/man/man1/acer-sense.1.gz
 a528d748b58ac120f104d51541d68540  usr/share/python3/runtime.d/acer-sense.rtupdate

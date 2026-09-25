@@ -1,61 +1,88 @@
-.TH ACER\-POWERSAVE 1 "2026-09-20" "1.0.0" "Manual del usuario"
-.SH NOMBRE
-acer\-powersave \- ajustes de energia para portatiles Acer Predator y Nitro
-.SH SINOPSIS
+.TH ACER\-POWERSAVE 1 "September 2026" "1.0.0" "User Commands"
+.SH NAME
+acer\-powersave \- hardware and power management for Acer Predator and Nitro laptops
+.SH SYNOPSIS
 .B acer\-powersave
-.I orden
-.RI [ argumentos ]
-.SH DESCRIPCION
-Aplica los ajustes de energia que corresponden al perfil activo de
+.I command
+.RI [ arguments ]
+.SH DESCRIPTION
+Applies the power settings that match the active profile of
 .BR power\-profiles\-daemon (8),
-sin mantener estado propio en disco: el perfil de PPD es la unica fuente de
-verdad. En KDE, PowerDevil ya traduce conectado y bateria a perfil, de modo que
-esto sigue al cable y respeta ademas el cambio manual del usuario.
+keeping no state of its own on disk: the PPD profile is the single source of
+truth. Under KDE, PowerDevil already maps AC and battery to a profile, so this
+follows the mains cable and still honours a manual override.
 .PP
-No toca el brillo de la pantalla ni la retroiluminacion del teclado.
-.SH ORDENES
+It also corrects the CPU frequency cap that PPD applies in its power\-saver
+profile. On this hardware that cap is counterproductive: measured on a
+PH315\-53, the same task takes 3.25 times longer and burns 3.3 times more
+energy, because the CPU cannot race to idle. See
+.B unpin_cpu_freq
+in the configuration file to turn the correction off.
+.PP
+It does not touch screen brightness.
+.SH COMMANDS
 .TP
 .B daemon
-Sigue el perfil activo de power\-profiles\-daemon y aplica los ajustes
-privilegiados. Es lo que ejecuta el servicio
-.BR acer\-powersave.service .
+Follows the active power\-profiles\-daemon profile and applies the privileged
+settings. This is what
+.B acer\-powersave.service
+runs.
 .TP
 .B status
-Muestra consumo, perfil, gobernador, EPP, frecuencia, turbo, ASPM, estado de la
-GPU dedicada y de los ventiladores.
+Shows power draw, profile, governor, EPP, frequency, turbo, ASPM, and the state
+of the discrete GPU and the fans.
 .TP
-.BI medir " [segundos]"
-Mide el consumo mediano en reposo, descartando las muestras tomadas con la CPU
-ocupada para que comparar dos configuraciones tenga sentido. Por omision, 30
-segundos.
+.BI measure " [seconds]"
+Measures median idle power draw, discarding samples taken while the CPU was
+busy so that comparing two configurations means something. Defaults to 30
+seconds. Also accepts the older name
+.BR medir .
 .TP
 .BI gpu " on\fR|\fPoff"
-Enciende o apaga la GPU NVIDIA Optimus en caliente, sin reiniciar. Requiere
-privilegios de root.
+Powers the NVIDIA Optimus GPU up or down while the system is running, with no
+reboot. Requires root.
+.IP
+With the GPU off there is no HDMI output on models where the port hangs off the
+discrete card, which is the case on the PH315\-53. Run
+.B gpu on
+before plugging a monitor in.
 .TP
 .B fan
-Aplica una curva de ventiladores con histeresis, leida de
+Applies a fan curve with hysteresis, read from
 .IR /etc/acer\-powersave/profiles.conf .
-Necesita el modulo linuwu_sense. Requiere privilegios de root.
-.SH FICHEROS
+Needs the linuwu_sense module. Requires root.
+.TP
+.BI save-curve " MIN_TEMP CURVE"
+Writes a fan curve to the configuration file. Invoked by the graphical
+interface through polkit; rarely useful by hand. Also accepts the older name
+.BR guardar\-curva .
+.SH FILES
 .TP
 .I /etc/acer-powersave/profiles.conf
-Ajustes aplicados en cada perfil.
+Settings applied for each profile. Keys are documented in the file itself.
 .TP
 .I /etc/default/grub.d/50-acer-powersave.cfg
-Parametros de arranque recomendados.
-.SH NOTAS
-Para consultar si la GPU dedicada esta apagada hay que leer sysfs:
+Recommended kernel command line parameters.
+.SH NOTES
+To find out whether the discrete GPU is powered down, read sysfs.
 .BR lspci (8)
-y
+and
 .BR nvidia\-smi (1)
-despiertan el puente PCIe y devuelven una lectura falsa.
+wake the PCIe bridge up and give you a false reading:
 .PP
 .nf
+.RS
 cat /sys/bus/pci/devices/0000:00:01.0/power_state
+.RE
 .fi
-.SH VEASE TAMBIEN
+.PP
+By default the card is kept out of the PCI bus from boot, which saves about
+500 mW. See
+.BR acer-powersave (1)
+README.Debian for how to change that.
+.SH SEE ALSO
 .BR acer\-powersave\-session (1),
+.BR blink (1),
 .BR powerprofilesctl (1)
-.SH AUTOR
+.SH AUTHOR
 Antonio Orizondo Leyva

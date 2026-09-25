@@ -1,58 +1,81 @@
-acer-powersave para Debian
-==========================
+acer-powersave for Debian
+=========================
 
-Conflicto con otros gestores de energia
----------------------------------------
-No instales TLP, tuned ni auto-cpufreq junto a esto: todos compiten por los
-mismos ajustes y power-profiles-daemon los declara en Conflicts. Si TLP estuvo
-instalado, comprueba que no dejo enmascarado PPD:
+Clash with other power managers
+-------------------------------
+Do not install TLP, tuned or auto-cpufreq alongside this: they all fight over
+the same settings, and power-profiles-daemon lists them in Conflicts. If TLP
+was ever installed, check it did not leave PPD masked:
 
-    systemctl is-enabled power-profiles-daemon.service   # no debe decir masked
+    systemctl is-enabled power-profiles-daemon.service   # must not say masked
 
-Conflicto con PowerDevil "Ejecutar un script"
----------------------------------------------
-Si tenias configurada la accion "Ejecutar un script" de PowerDevil para tocar
-la CPU (por ejemplo "sudo cpupower frequency-set ..."), quitala: pelea con PPD
-y con este servicio, y el resultado depende de quien escriba el ultimo. Mira
-~/.config/powerdevilrc, secciones [AC][RunScript] y [Battery][RunScript].
+Clash with PowerDevil "Run a script"
+------------------------------------
+If you had PowerDevil's "Run a script" action set up to poke the CPU (say
+"sudo cpupower frequency-set ..."), remove it: it fights both PPD and this
+service, and the winner is whoever writes last. Look in ~/.config/powerdevilrc,
+sections [AC][RunScript] and [Battery][RunScript].
 
-Servicio de sesion
-------------------
-La tasa de refresco solo puede cambiarla quien tenga la sesion grafica, asi
-que va en un servicio de usuario aparte:
+Why the CPU frequency is put back
+---------------------------------
+In power-saver, PPD pins scaling_max_freq to the hardware minimum on top of
+setting the EPP. On this hardware that backfires: measured, the same task takes
+3.25x longer and burns 3.3x more energy, because the CPU cannot race to idle.
+This service undoes the cap a couple of seconds after each profile change.
+
+That delay is not laziness. PPD emits its PropertiesChanged signal and keeps
+writing afterwards, so checking immediately finds nothing to undo.
+
+PPD cannot be configured out of this. It has no setting for it; --block-driver
+intel_pstate does stop it, but that removes the CPU driver altogether and the
+performance profile disappears with it; and platform_profile, the canonical way
+to let firmware handle profiles, is rejected by this laptop's firmware. Set
+unpin_cpu_freq = no in /etc/acer-powersave/profiles.conf if you disagree.
+
+Session service
+---------------
+Only whoever owns the graphical session can change the refresh rate, so that
+part lives in a separate user service:
 
     systemctl --user enable --now acer-powersave-session.service
 
-Parametros de arranque
-----------------------
-El paquete instala /etc/default/grub.d/50-acer-powersave.cfg, que ajusta la
-linea de comandos del kernel sin tocar tu /etc/default/grub:
+Kernel command line
+-------------------
+The package installs /etc/default/grub.d/50-acer-powersave.cfg, which adjusts
+the kernel command line without touching your /etc/default/grub:
 
- * elimina intel_pstate=passive, que deja el governor clavado en la frecuencia
-   minima incluso con carga y vuelve inoperante el EPP;
- * elimina pci_aspm=force, que no es un parametro valido (el correcto es
+ * drops intel_pstate=passive, which pins the governor to the minimum frequency
+   even under load and leaves the EPP inoperative;
+ * drops pci_aspm=force, which is not a valid parameter (the real one is
    pcie_aspm);
- * anade pcie_aspm=force, i915.enable_fbc=1 e i915.enable_dc=2 si faltan.
+ * adds pcie_aspm=force, i915.enable_fbc=1 and i915.enable_dc=2 if missing.
 
-Desinstalar el paquete revierte el cambio y vuelve a ejecutar update-grub.
+Removing the package reverts this and runs update-grub again.
 
-GPU NVIDIA
+NVIDIA GPU
 ----------
-"acer-powersave gpu off" descarga los modulos, retira la tarjeta del bus PCI y
-deja que el puente caiga a D3cold; "gpu on" la devuelve. No hace falta
-reiniciar ni usar envycontrol.
+"acer-powersave gpu off" unloads the modules, removes the card from the PCI bus
+and lets the bridge drop to D3cold; "gpu on" brings it back. No reboot and no
+envycontrol needed.
 
-Si envycontrol dejo su regla udev, la tarjeta se expulsara nada mas aparecer:
+By default the card is kept out of the bus from boot: the blacklist in
+/etc/modprobe.d/zz-nvidia-debian.conf stops the driver loading, and
+acer-nvidia-arranque.service removes the four PCI functions before the display
+manager starts. That saves about 500 mW. HDMI needs the card, so run
+"gpu on" before plugging a monitor in.
+
+If envycontrol left its udev rule behind, the card is ejected the moment it
+appears -- including when "gpu on" rescans the bus:
 
     sudo rm /etc/udev/rules.d/50-remove-nvidia.rules
     sudo udevadm control --reload
 
-Y si /etc/modprobe.d/blacklist-nvidia.conf contiene lineas "alias nvidia off",
-quitalas: impiden cargar el driver incluso invocandolo a mano.
+And if /etc/modprobe.d/blacklist-nvidia.conf contains "alias nvidia off" lines,
+drop them: they prevent loading the driver even by hand.
 
-Para comprobar el estado usa siempre sysfs. "lspci" y "nvidia-smi" DESPIERTAN
-el puente y devuelven una lectura falsa:
+Always check the state through sysfs. "lspci" and "nvidia-smi" WAKE the bridge
+and give you a false reading:
 
-    cat /sys/bus/pci/devices/0000:00:01.0/power_state    # D3cold = apagada
+    cat /sys/bus/pci/devices/0000:00:01.0/power_state    # D3cold = powered down
 
  -- Antonio Orizondo Leyva <aorizondoleyva@gmail.com>

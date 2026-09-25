@@ -1,0 +1,28 @@
+[Unit]
+Description=Deja la GPU dedicada fuera del bus hasta que se pida encenderla
+Documentation=https://github.com/aorizondo/Div-Linuwu-Sense
+# La alternativa clasica es una regla udev con ATTR{remove}="1" sobre
+# ACTION=="add" (es lo que hace envycontrol en modo integrated). Aqui no sirve:
+# "acer-powersave gpu on" enciende la tarjeta reescaneando el puente PCIe, y un
+# reescaneo genera precisamente eventos "add", de modo que la regla la expulsaria
+# en el mismo instante en que se intenta encenderla. Un oneshot de arranque hace
+# el mismo trabajo y deja libre el encendido en caliente.
+DefaultDependencies=no
+After=local-fs.target systemd-udev-trigger.service
+# Antes de que el gestor de sesion levante Xorg: en cuanto Xorg abre
+# /dev/nvidia0 ya no se puede sacar la tarjeta del bus.
+Before=sysinit.target display-manager.service
+ConditionPathExists=/sys/bus/pci/devices/0000:01:00.0
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/acer-powersave gpu off
+# Sin driver cargado nadie puede estar usandola, asi que esto no deberia
+# tardar. El limite existe para que un fallo no bloquee el arranque.
+TimeoutStartSec=30
+# Que no llegue a apagarse no es motivo para marcar el arranque como fallido.
+SuccessExitStatus=0 1
+
+[Install]
+WantedBy=sysinit.target
