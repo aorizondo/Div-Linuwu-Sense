@@ -1,60 +1,101 @@
-linuwu-sense-dkms para Debian
-=============================
+linuwu-sense-dkms for Debian
+============================
 
-Sustitucion de acer_wmi
------------------------
-Este modulo reemplaza al acer_wmi del kernel: ambos enlazan con los mismos
-GUID de ACPI-WMI y no pueden convivir. El paquete instala
+Replacing acer_wmi
+------------------
+This module replaces the kernel's acer_wmi: both bind to the same ACPI-WMI
+GUIDs and cannot coexist. The package installs
 
     /usr/lib/modprobe.d/linuwu-sense.conf
 
-con "blacklist acer_wmi" mas "install acer_wmi /bin/true" (lo segundo hace
-falta porque el blacklist por si solo no impide que el kernel autocargue el
-modulo). Al desinstalar el paquete el fichero desaparece y acer_wmi vuelve.
+with "blacklist acer_wmi" plus "install acer_wmi /bin/true" (the second is
+needed because blacklisting alone does not stop the kernel autoloading it).
+Removing the package removes the file and acer_wmi comes back.
 
-El paquete NO descarga modulos durante la instalacion: hacerlo puede colgar el
-sistema si hay dispositivos en uso. Tras instalar, reinicia, o bien:
+The package does NOT unload modules during installation: doing so can hang the
+machine if devices are in use. After installing, reboot, or run:
 
     sudo modprobe -r acer_wmi && sudo modprobe linuwu_sense
 
-Para volver a acer_wmi sin desinstalar, crea
-/etc/modprobe.d/zz-local-acer-wmi.conf con:
+To go back to acer_wmi without uninstalling, create
+/etc/modprobe.d/zz-local-acer-wmi.conf containing:
 
     install acer_wmi /sbin/modprobe --ignore-install acer_wmi
 
 Secure Boot
 -----------
-Si Secure Boot esta activo, el modulo debe ir firmado o el kernel lo rechaza
-("Key was rejected by service"). DKMS lo gestiona solo, pero hay que enrolar
-la clave una vez:
+With Secure Boot on, the module must be signed or the kernel refuses it ("Key
+was rejected by service"). DKMS handles the signing, but the key has to be
+enrolled once:
 
-    sudo dkms generate_mok                       # si no existe ya
+    sudo dkms generate_mok                       # if it does not exist yet
     sudo mokutil --import /var/lib/dkms/mok.pub
-    # reiniciar, elegir "Enroll MOK" e introducir la contrasena
+    # reboot, pick "Enroll MOK", type the password
     sudo dkms autoinstall
 
-Comprueba el estado con "mokutil --sb-state". La clave sobrevive a las
-actualizaciones de kernel: solo se enrola una vez, y DKMS vuelve a firmar en
-cada reconstruccion.
+Check with "mokutil --sb-state". The key survives kernel upgrades: you enrol it
+once and DKMS re-signs on every rebuild.
 
-Permisos
---------
-Los atributos sysfs pertenecen al grupo linuwu_sense. Para manejarlos sin sudo:
+Permissions
+-----------
+The sysfs attributes belong to the linuwu_sense group. To use them without
+sudo:
 
-    sudo usermod -aG linuwu_sense $USER      # requiere volver a iniciar sesion
+    sudo usermod -aG linuwu_sense $USER      # needs a new login session
 
-Rutas (segun modelo):
+Paths (depending on model):
 
-    /sys/module/linuwu_sense/drivers/platform:acer-wmi/acer-wmi/predator_sense/
-    /sys/module/linuwu_sense/drivers/platform:acer-wmi/acer-wmi/nitro_sense/
-    /sys/module/linuwu_sense/drivers/platform:acer-wmi/acer-wmi/four_zoned_kb/
+    /sys/devices/platform/acer-wmi/predator_sense/
+    /sys/devices/platform/acer-wmi/nitro_sense/
+    /sys/devices/platform/acer-wmi/four_zoned_kb/
 
-Diferencias con el upstream
----------------------------
- * Compatibilidad con la API platform_profile anterior a 6.13. El upstream usa
-   devm_platform_profile_register() y platform_profile_notify(dev), que no
-   existen en el kernel 6.12 LTS de Debian 13.
- * Quirk del Predator PH315-53 completado con predator_v4 y four_zone_kb.
- * Makefile que respeta KERNELRELEASE, necesario para DKMS.
+A udev rule reapplies those permissions on every module load. Without it they
+are lost whenever the module is reloaded -- on a DKMS upgrade, for instance --
+because the kernel recreates the attributes as root:root. The symptom is
+confusing: the application asks you to join a group you are already in.
+
+Four-zone RGB keyboard
+----------------------
+Per-zone colours need the zones to be ENABLED first, which upstream never did.
+The sequence is:
+
+    method 0x02  <-  BIT(3) | GENMASK_ULL(43,40)     enable the zones
+    method 0x06  <-  zone | R<<8 | G<<16 | B<<24     one call per zone
+    method 0x14  <-  KBLE=0, KBLS=0, brightness      switch on, static
+
+Writing per_zone_mode does all three. Two things worth knowing:
+
+ * KBLE = 0 is the STATIC effect, not "off". It looks like "off" because with
+   no zones enabled there is nothing to paint.
+ * Method 0x02 is absent from the WMBH block of this firmware's SSDT, which
+   only implements 0x05-0x07 and 0x10-0x17. It answers anyway. Reading the
+   ACPI to decide what is supported leads to the wrong conclusion here.
+
+This was recovered by disassembling the Windows PredatorSense application.
+
+Debug helper
+------------
+predator_sense/wmi_call invokes any gaming WMI method:
+
+    echo "5,0" > .../predator_sense/wmi_call && cat .../wmi_call
+
+Format is "<method>,<value>", value in decimal or 0x hex. It is a diagnostic
+aid, not a stable interface, and calling methods blindly can leave the EC in a
+strange state until the module is reloaded.
+
+Differences from upstream
+-------------------------
+ * Compatibility with the pre-6.13 platform_profile API. Upstream uses
+   devm_platform_profile_register() and platform_profile_notify(dev), which do
+   not exist in Debian 13's 6.12 LTS kernel.
+ * platform_profile is only registered if the firmware actually answers.
+   Upstream registers unconditionally; Div-Linuwu-Sense queried a "supported
+   profiles" method that many firmwares do not implement and gave up on
+   failure. Neither is right: this fork falls back to the standard set when the
+   firmware cannot enumerate but does respond, and registers nothing when it
+   does not respond at all.
+ * Predator PH315-53 quirk completed with predator_v4 and four_zone_kb.
+ * Four-zone RGB fixed, as described above.
+ * Makefile that honours KERNELRELEASE, needed by DKMS.
 
  -- Antonio Orizondo Leyva <aorizondoleyva@gmail.com>

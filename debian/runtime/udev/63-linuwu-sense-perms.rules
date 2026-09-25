@@ -1,0 +1,18 @@
+# Permisos de los atributos sysfs de linuwu_sense, aplicados en CADA carga del
+# modulo.
+#
+# Quien los define es /usr/lib/tmpfiles.d/linuwu-sense.conf, pero tmpfiles solo
+# se ejecuta en el arranque y al instalar el paquete, y los atributos de sysfs
+# no sobreviven a una recarga: cuando el driver hace probe otra vez, el kernel
+# los recrea con root:root 0644 y se pierde el grupo.
+#
+# Pasa mas de lo que parece: al actualizar el modulo por DKMS, al reinstalar el
+# paquete, o con un modprobe -r / modprobe a mano. El sintoma es que la
+# aplicacion empieza a dar "sin permiso" y sugiere anadirse a un grupo en el
+# que el usuario YA esta, que despista bastante.
+#
+# "bind" es el evento correcto, no "add": los grupos de atributos
+# (predator_sense, four_zoned_kb...) los crea el driver durante el probe, asi
+# que en "add" todavia no existen.
+ACTION=="bind", SUBSYSTEM=="platform", KERNEL=="acer-wmi", \
+    RUN+="/usr/bin/systemd-tmpfiles --create /usr/lib/tmpfiles.d/linuwu-sense.conf"

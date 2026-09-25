@@ -1,0 +1,17 @@
+# Permisos de los LEDs por zona del teclado.
+#
+# El driver los publica en /sys/class/leds/ con los nombres que fija
+# Documentation/leds/leds-class.rst para teclados por zonas:
+#
+#     acer-wmi:multicolor:kbd_zoned_backlight-<zona>
+#
+# El kernel los crea como root:root, de modo que sin esta regla cualquier
+# programa de usuario -blink incluido- necesitaria sudo para encender una
+# zona. Se les da el mismo grupo que al resto del sysfs del driver, asi hay
+# una sola pertenencia que gestionar.
+#
+# Se ajustan los dos atributos que se escriben, no el directorio entero: el
+# resto (trigger, device...) no tiene por que quedar abierto.
+ACTION=="add|change", SUBSYSTEM=="leds", KERNEL=="acer-wmi:*:kbd_zoned_backlight-*", \
+    RUN+="/bin/chgrp linuwu_sense /sys%p/brightness /sys%p/multi_intensity", \
+    RUN+="/bin/chmod 0660 /sys%p/brightness /sys%p/multi_intensity"

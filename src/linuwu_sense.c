@@ -33,6 +33,7 @@
 #include <linux/leds.h>
 #include <linux/platform_device.h>
 #include <linux/platform_profile.h>
+#include <linux/led-class-multicolor.h>
 #include <linux/acpi.h>
 #include <linux/i8042.h>
 #include <linux/rfkill.h>
@@ -95,6 +96,29 @@ MODULE_LICENSE("GPL");
 #define ACER_WMID_SET_GAMING_LED_METHODID 2
 #define ACER_WMID_GET_GAMING_LED_METHODID 4
 #define ACER_WMID_GET_GAMING_SYS_INFO_METHODID 5
+
+/*
+ * Activacion de las zonas del teclado RGB.
+ *
+ * Escribir los colores con el metodo 6 no basta: el EC los guarda en
+ * KB1R..KB4B y sigue sin pintarlos. Hay que ACTIVAR las zonas antes, con el
+ * metodo 2 (SET_GAMING_LED), pasando BIT(3) en el byte bajo y un bit por zona
+ * en los bits 40 a 43.
+ *
+ * Sale de desensamblar PredatorSense 3.00.3152 para Windows: el metodo
+ * Set_Static_Keyboard_Set_Status construye exactamente
+ *
+ *     8 | (zona1 << 40) | (zona2 << 41) | (zona3 << 42) | (zona4 << 43)
+ *
+ * y se lo pasa a WMISetGamingLEDBehavior. El metodo 4 devuelve ese mismo mapa
+ * de bits, asi que sirve para consultar que zonas estan activas.
+ *
+ * Ojo: el metodo 2 NO aparece en el WMBH del SSDT de este equipo, que solo
+ * implementa 0x05-0x07 y 0x10-0x17. Aun asi responde y funciona. Deducir el
+ * soporte leyendo el ACPI habria llevado a la conclusion contraria.
+ */
+#define ACER_GAMING_KBL_SET_ON        BIT(3)
+#define ACER_GAMING_KBL_SET_ALL_ZONES GENMASK_ULL(43, 40)
 #define ACER_WMID_SET_GAMING_FAN_BEHAVIOR_METHODID 14
 #define ACER_WMID_SET_GAMING_FAN_SPEED_METHODID 16
 #define ACER_WMID_SET_GAMING_MISC_SETTING_METHODID 22
@@ -2488,6 +2512,7 @@ static int
 acer_predator_v4_platform_profile_probe(void *drvdata, unsigned long *choices)
 {
     unsigned long supported_profiles;
+    u8 probe_tp;
     int err;
 
     // If enable_all, predator_v4 or nitro_v4 is set, provide all profiles
@@ -2510,8 +2535,50 @@ acer_predator_v4_platform_profile_probe(void *drvdata, unsigned long *choices)
                                        (u8 *)&supported_profiles);
     if (err)
     {
-        pr_warn("Failed to get supported profiles, error: %d\n", err);
-        return err;
+        /*
+         * Que el firmware no sepa DECIR que perfiles admite no significa que
+         * no los admita. El PH315-53 devuelve -EIO a esta consulta, y el
+         * codigo original se rendia: sin platform_profile registrado,
+         * power-profiles-daemon se queda con su "placeholder" y no hay forma
+         * de que los perfiles del sistema lleguen al firmware.
+         *
+         * Se cae al juego estandar de los Predator v4, que es el que el
+         * driver ya sabe escribir mas abajo. Si alguno no existiera de
+         * verdad, el firmware rechazaria ese valor concreto al aplicarlo, que
+         * es un fallo mucho mas localizado que quedarse sin perfiles.
+         */
+        /*
+         * Antes de asumir nada hay que distinguir dos casos que dan el mismo
+         * error:
+         *
+         *   a) el firmware ACEPTA perfiles pero no sabe enumerarlos
+         *   b) el firmware NO implementa perfiles termicos en absoluto
+         *
+         * En el caso (b) registrar platform_profile es peor que no hacerlo:
+         * power-profiles-daemon lo adopta como PlatformDriver y cada cambio de
+         * perfil falla en silencio. Es lo que pasa en el PH315-53, donde tanto
+         * la lectura como la escritura del perfil devuelven -EIO.
+         *
+         * Se distingue leyendo el perfil actual: si tampoco responde, este
+         * equipo es del caso (b) y no se registra nada.
+         */
+        if (WMID_gaming_get_misc_setting(ACER_WMID_MISC_SETTING_PLATFORM_PROFILE,
+                                         &probe_tp))
+        {
+            pr_info("El firmware no implementa perfiles termicos; no se registra platform_profile\n");
+            return err;
+        }
+
+        pr_info("El firmware no enumera los perfiles admitidos (%d) pero si responde; se asume el juego estandar\n",
+                err);
+        set_bit(PLATFORM_PROFILE_LOW_POWER, choices);
+        set_bit(PLATFORM_PROFILE_QUIET, choices);
+        set_bit(PLATFORM_PROFILE_BALANCED, choices);
+        set_bit(PLATFORM_PROFILE_BALANCED_PERFORMANCE, choices);
+        set_bit(PLATFORM_PROFILE_PERFORMANCE, choices);
+        acer_predator_v4_max_perf = ACER_PREDATOR_V4_THERMAL_PROFILE_PERFORMANCE;
+        last_non_turbo_profile = ACER_PREDATOR_V4_THERMAL_PROFILE_BALANCED;
+        return 0;
     }
 
     pr_info("Supported thermal profiles bitmap: 0x%lx\n", supported_profiles);
@@ -2599,7 +2666,13 @@ static const struct platform_profile_ops acer_predator_v4_platform_profile_ops =
 static int acer_platform_profile_setup(struct platform_device *device)
 {
     int retry;
-    int max_retries = 10;
+    /*
+     * Tres intentos, no diez. El bucle existe porque el registro puede llegar
+     * antes de que el bus WMI este listo, y eso se resuelve en el primer
+     * reintento o en ninguno. Con diez y espera creciente se perdian siete
+     * segundos de arranque cada vez que fallaba de verdad.
+     */
+    int max_retries = 3;
     int retry_delay_ms = 100;
     //int err;
 
@@ -4053,8 +4126,65 @@ static struct device_attribute battery_calibration = __ATTR(battery_calibration,
 static struct device_attribute battery_limiter = __ATTR(battery_limiter, 0644, predator_battery_limit_show, predator_battery_limit_store);
 static struct device_attribute fan_speed = __ATTR(fan_speed, 0644, predator_fan_speed_show, predator_fan_speed_store);
 static struct device_attribute lcd_override = __ATTR(lcd_override, 0644, predator_lcd_override_show, predator_lcd_override_store);
+/*
+ * Banco de pruebas para el interfaz WMI gaming.
+ *
+ * Escribir "<metodo>,<valor>" invoca WMI_gaming_execute_u64() con esos
+ * argumentos y guarda lo que devuelva; leer el fichero muestra el resultado.
+ * El valor admite decimal o 0x hexadecimal.
+ *
+ * Existe porque el mapa de metodos de este firmware no esta documentado en
+ * ninguna parte y la unica forma de averiguar que hace cada uno es probarlos.
+ * Sin esto, cada tanteo obligaba a recompilar el modulo entero.
+ *
+ * CUIDADO: invocar metodos a ciegas puede dejar el EC en un estado raro --ya
+ * paso con la secuencia del parche RFC, que apago el teclado hasta recargar
+ * el modulo--. Es una herramienta de diagnostico, no una interfaz estable, y
+ * por eso no se documenta como tal.
+ */
+static u64 wmi_probe_result;
+static acpi_status wmi_probe_status = AE_OK;
+
+static ssize_t wmi_call_show(struct device *dev, struct device_attribute *attr,
+                             char *buf)
+{
+    return sprintf(buf, "resultado=0x%llx estado=0x%x (%s)\n",
+                   wmi_probe_result, wmi_probe_status,
+                   ACPI_SUCCESS(wmi_probe_status) ? "ok" : "fallo");
+}
+
+static ssize_t wmi_call_store(struct device *dev, struct device_attribute *attr,
+                              const char *buf, size_t count)
+{
+    char entrada[64];
+    char *p, *tok;
+    u32 metodo;
+    u64 valor;
+    size_t len = min(count, sizeof(entrada) - 1);
+
+    memcpy(entrada, buf, len);
+    entrada[len] = '\0';
+    p = strim(entrada);
+
+    tok = strsep(&p, ",");
+    if (!tok || kstrtou32(tok, 0, &metodo))
+        return -EINVAL;
+    if (!p || kstrtou64(strim(p), 0, &valor))
+        return -EINVAL;
+
+    wmi_probe_result = 0;
+    wmi_probe_status = WMI_gaming_execute_u64(metodo, valor, &wmi_probe_result);
+
+    pr_info("wmi_call: metodo 0x%x valor 0x%llx -> estado 0x%x resultado 0x%llx\n",
+            metodo, valor, wmi_probe_status, wmi_probe_result);
+    return count;
+}
+
+static DEVICE_ATTR_RW(wmi_call);
+
 static struct attribute *predator_sense_attrs[] = {
     &dev_attr_version.attr,
+    &dev_attr_wmi_call.attr,
     &lcd_override.attr,
     &fan_speed.attr,
     &battery_limiter.attr,
@@ -4090,11 +4220,32 @@ struct get_four_zoned_kb_output
     u8 gmOutput[15];
 } __packed;
 
-static acpi_status set_kb_status(int mode, int speed, int brightness,
+/*
+ * El cuarto byte del buffer es KBCS, y no es relleno.
+ *
+ * Mapeo real, leido del SSDT12 de este equipo (metodo 0x14 de WMID_GUID4):
+ *
+ *     BHLK[0] -> KBLE      BHLK[4] -> KBED (direccion)
+ *     BHLK[1] -> KBLS      BHLK[5] -> KBCR
+ *     BHLK[2] -> KBBP      BHLK[6] -> KBCG
+ *     BHLK[3] -> KBCS      BHLK[7] -> KBCB
+ *
+ * El codigo original clavaba ese byte a 0 y no lo exponia. KBCS ("color
+ * scheme") es lo que decide si el EC pinta con el color unico de
+ * KBCR/KBCG/KBCB o con los colores por zona de KB1R..KB4B, que el metodo 6
+ * escribe en registros DISTINTOS. Con KBCS = 0 los colores por zona se
+ * escriben en el EC pero no se usan nunca, que es justo el sintoma que se
+ * veia: las cuatro zonas quedaban de un solo color.
+ *
+ * El firmware trata el valor 8 de forma especial -- "If (!((Local3 == 0x08)
+ * && (Local4 == Zero)))" se salta la escritura de KBED -- de ahi el valor por
+ * defecto del parametro de abajo.
+ */
+static acpi_status set_kb_status(int mode, int speed, int brightness, int scheme,
                                  int direction, int red, int green, int blue)
 {
     u64 resp = 0;
-    u8 gmInput[16] = {mode, speed, brightness, 0, direction, red, green, blue, 3, 1, 0, 0, 0, 0, 0, 0};
+    u8 gmInput[16] = {mode, speed, brightness, scheme, direction, red, green, blue, 3, 1, 0, 0, 0, 0, 0, 0};
 
     acpi_status status;
     union acpi_object *obj;
@@ -4171,6 +4322,15 @@ struct per_zone_color
 {
     u64 zone1, zone2, zone3, zone4;
     int brightness;
+} __packed;
+
+/* Formato exacto que espera el metodo 6: cuatro bytes, ni uno mas. */
+struct led_zone_set_param
+{
+    u8 zone;
+    u8 red;
+    u8 green;
+    u8 blue;
 } __packed;
 
 struct kb_state
@@ -4274,12 +4434,34 @@ static ssize_t four_zoned_rgb_kb_store(struct device *dev, struct device_attribu
 
     switch (mode)
     {
-    case 0x0: // Static mode: Ignore speed and direction
+    case 0x0: // APAGADO. No es un efecto, por mucho que el README lo llame
+              // "static mode": el firmware escribe este byte en KBLE y el
+              // valor 0 apaga la retroiluminacion entera.
+        /*
+         * Aqui habia dos causas superpuestas y costo separarlas: el original
+         * ponia ademas "speed = 0", y KBLS = 0 apaga TAMBIEN. Al dejar pasar
+         * la velocidad se pudo comprobar, efecto por efecto, cual de los dos
+         * ceros apagaba cada vez. Resultado en un PH315-53: los dos.
+         *
+         * Lo que arreglo el cambio fue el modo 1 (respiracion), que solo
+         * estaba roto por la velocidad y ahora funciona. El 0 apaga de todos
+         * modos, y no hay efecto de color fijo en este firmware.
+         */
         speed = 0;
         direction = 0;
         break;
-    case 0x1: // Breathing mode: Ignore speed
-        speed = 0;
+    case 0x1: // Respiracion: la direccion no aplica, la VELOCIDAD SI
+        /*
+         * El codigo original hacia aqui "speed = 0" siguiendo el comentario
+         * "Ignore speed" del proyecto de origen. En el PH315-53 eso no es
+         * ignorar la velocidad: es congelar la animacion en la fase oscura,
+         * y el efecto queda indistinguible de tener el teclado apagado.
+         * Verificado recorriendo los ocho efectos con brillo 100 y color
+         * rojo: los animados se vieron todos menos este, que quedo negro.
+         *
+         * Los demas efectos animados (2 a 7) no tocan speed y funcionan, asi
+         * que aqui se hace lo mismo y se respeta lo que pida el usuario.
+         */
         direction = 0;
         break;
     case 0x2: // Neon mode: Ignore red, green, blue, and direction
@@ -4309,7 +4491,7 @@ static ssize_t four_zoned_rgb_kb_store(struct device *dev, struct device_attribu
         return -EINVAL;
     }
 
-    status = set_kb_status(mode, speed, brightness, direction, red, green, blue);
+    status = set_kb_status(mode, speed, brightness, 0, direction, red, green, blue);
     if (ACPI_FAILURE(status))
     {
         pr_err("Error setting RGB KB status.\n");
@@ -4372,6 +4554,58 @@ static acpi_status get_per_zone_color(struct per_zone_color *output)
     return AE_OK;
 }
 
+/*
+ * Valor de KBCS al aplicar colores por zona. Ajustable en caliente
+ * (/sys/module/linuwu_sense/parameters/kb_scheme) porque el significado de
+ * cada valor no esta documentado en ningun sitio: el SSDT solo revela que el
+ * firmware distingue el 8, y el resto hay que averiguarlo probando en el
+ * equipo concreto.
+ */
+static int kb_scheme = 0;
+module_param(kb_scheme, int, 0644);
+MODULE_PARM_DESC(kb_scheme,
+                 "KBCS al fijar colores por zona (0 = color unico, 8 = por zona)");
+
+struct acer_kb_zone_led
+{
+    struct led_classdev_mc mc;
+    struct mc_subled subled[3];
+    u8 zone_id;                 /* mascara de zona: 1, 2, 4 u 8 */
+};
+
+static struct acer_kb_zone_led acer_kb_zone_leds[4];
+static bool acer_kb_leds_listos;
+
+/*
+ * Mantiene al dia lo que publican los LEDs cuando el color se cambia por el
+ * sysfs propio del driver.
+ *
+ * Son dos caminos hacia el mismo hardware y cada uno guarda su estado: sin
+ * esto, escribir per_zone_mode dejaba a la clase LED informando de los
+ * colores anteriores, y cualquier programa que guardase y restaurase a traves
+ * de ella -blink, por ejemplo- reponia un estado que ya no era el real.
+ */
+static void acer_kb_leds_sync(const struct per_zone_color *estado)
+{
+    const u64 colores[4] = {estado->zone1, estado->zone2,
+                            estado->zone3, estado->zone4};
+    int i;
+
+    if (!acer_kb_leds_listos)
+        return;
+
+    for (i = 0; i < 4; i++)
+    {
+        struct acer_kb_zone_led *z = &acer_kb_zone_leds[i];
+
+        z->subled[0].intensity = (colores[i] >> 16) & 0xFF;
+        z->subled[1].intensity = (colores[i] >> 8) & 0xFF;
+        z->subled[2].intensity = colores[i] & 0xFF;
+        if (estado->brightness >= 0 && estado->brightness <= 100)
+            z->mc.led_cdev.brightness = estado->brightness;
+    }
+}
+
 static acpi_status set_per_zone_color(struct per_zone_color *input)
 {
     acpi_status status;
@@ -4379,39 +4613,54 @@ static acpi_status set_per_zone_color(struct per_zone_color *input)
     u8 zone_ids[] = {0x1, 0x2, 0x4, 0x8};
 
     /*
-     * El primer parametro no es un "modo" cualquiera: el firmware lo escribe
-     * en KBLE (metodo WMBH 0x14 -> \_SB.PCI0.LPCB.EC0.KBLE) y el valor 0 apaga
-     * la retroiluminacion entera. Aqui solo se quiere fijar el brillo -- los
-     * colores por zona van por ACER_WMID_SET_GAMING_RGB_KB_METHODID -- asi que
-     * pasar 0 apagaba el teclado en cada cambio de color, y de paso dejaba de
-     * funcionar el ajuste de brillo por las teclas Fn, que el EC solo atiende
-     * con KBLE distinto de cero.
-     *
-     * Se conserva el efecto que hubiera activo; si no habia ninguno se usa el
-     * primero valido en vez de apagar.
+     * Paso 1: activar las cuatro zonas. Sin esto el EC acepta los colores,
+     * los guarda y no los usa -- el sintoma que tuvo desconcertado a este
+     * proyecto: las cuatro zonas salian de un color uniforme.
      */
-    status = set_kb_status(current_kb_state.mode ? current_kb_state.mode : 1,
-                           0, input->brightness, 0, 0, 0, 0);
+    status = WMI_gaming_execute_u64(ACER_WMID_SET_GAMING_LED_METHODID,
+                                    ACER_GAMING_KBL_SET_ON |
+                                    ACER_GAMING_KBL_SET_ALL_ZONES, NULL);
+    if (ACPI_FAILURE(status))
+    {
+        pr_err("Error activando las zonas del teclado: %s\n",
+               acpi_format_exception(status));
+        return status;
+    }
+
+    /* Paso 2: un color por zona, empaquetado como zona|R<<8|G<<16|B<<24. */
+    for (int i = 0; i < 4; i++)
+    {
+        u64 color = *zones[i];
+        u64 arg = zone_ids[i]
+                | ((color >> 16) & 0xFF) << 8      /* rojo   */
+                | ((color >> 8) & 0xFF) << 16      /* verde  */
+                | (color & 0xFF) << 24;            /* azul   */
+
+        status = WMI_gaming_execute_u64(ACER_WMID_SET_GAMING_RGB_KB_METHODID,
+                                        arg, NULL);
+        if (ACPI_FAILURE(status))
+        {
+            pr_err("Error setting KB color (zone %d): %s\n", i + 1,
+                   acpi_format_exception(status));
+            return status;
+        }
+    }
+
+    /*
+     * Paso 3: encender en estatico. El modo 0 no apaga, como se creia: es el
+     * efecto ESTATICO, y con las zonas activas pinta cada una de su color.
+     * La velocidad va a 0 a proposito -- es lo que manda PredatorSense -- y
+     * el color unico a 0, porque aqui no se usa.
+     */
+    status = set_kb_status(0, 0, input->brightness, 0, 0, 0, 0, 0);
     if (ACPI_FAILURE(status))
     {
         pr_err("Error setting KB status.\n");
         return -ENODEV;
     }
 
-    for (int i = 0; i < 4; i++)
-    {
-        *zones[i] = (cpu_to_be64(*zones[i]) >> 32) | zone_ids[i];
-        status = WMI_gaming_execute_u64(ACER_WMID_SET_GAMING_RGB_KB_METHODID, *zones[i], NULL);
-        if (ACPI_FAILURE(status))
-        {
-            pr_err("Error setting KB color (zone %d): %s\n", i + 1, acpi_format_exception(status));
-            return status;
-        }
-    }
-    /* set per_zone to 1*/
-
     current_kb_state.per_zone = 1;
-
+    acer_kb_leds_sync(input);
     return status;
 }
 
@@ -4587,7 +4836,7 @@ static int four_zone_kb_state_load(void)
     }
     else
     {
-        status = set_kb_status(current_kb_state.mode, current_kb_state.speed, current_kb_state.brightness, current_kb_state.direction, current_kb_state.red, current_kb_state.green, current_kb_state.blue);
+        status = set_kb_status(current_kb_state.mode, current_kb_state.speed, current_kb_state.brightness, 0, current_kb_state.direction, current_kb_state.red, current_kb_state.green, current_kb_state.blue);
         if (ACPI_FAILURE(status))
         {
             pr_err("Error setting KB status.\n");
@@ -4602,6 +4851,146 @@ static int four_zone_kb_state_load(void)
 /* Four Zoned Keyboard Attributes */
 static struct device_attribute four_zoned_rgb_mode = __ATTR(four_zone_mode, 0644, four_zoned_rgb_kb_show, four_zoned_rgb_kb_store);
 static struct device_attribute per_zoned_rgb_mode = __ATTR(per_zone_mode, 0644, per_zoned_rgb_kb_show, per_zoned_rgb_kb_store);
+/*
+ * Las cuatro zonas como LEDs multicolor estandar de Linux.
+ *
+ * Con esto aparecen en /sys/class/leds/ y cualquier programa que ya sepa
+ * manejar LEDs -scripts, OpenRGB, el propio escritorio- puede encenderlas sin
+ * conocer nada del interfaz WMI de Acer.
+ *
+ * El nombre NO es libre. Documentation/leds/leds-class.rst fija la forma
+ * "<devicename>:<color>:<function>", y para teclados por zonas concreta aun
+ * mas:
+ *
+ *     "<devicename>:<color>:kbd_zoned_backlight-<zone_name>"
+ *
+ * con <devicename> igual para todas las zonas del mismo teclado y <zone_name>
+ * descriptivo y reutilizable entre modelos de trazado parecido (la propia
+ * documentacion propone left / middle / right / numpad). El acer-wmi del
+ * kernel usa "acer-wmi" como devicename para su LED de correo, asi que se
+ * mantiene aqui.
+ *
+ *     /sys/class/leds/acer-wmi:multicolor:kbd_zoned_backlight-left/
+ *         multi_intensity    "255 0 0"
+ *         brightness         0..100
+ *
+ * Saltarse esta convencion es justo lo que impide que las herramientas
+ * existentes reconozcan los LEDs, que es el motivo de publicarlos.
+ *
+ * El sysfs propio del driver (four_zoned_kb/) se queda: expone los efectos
+ * animados, que no tienen equivalente en la clase LED.
+ */
+
+static int acer_kb_zone_set(struct led_classdev *cdev,
+                            enum led_brightness brightness)
+{
+    struct led_classdev_mc *mc = lcdev_to_mccdev(cdev);
+    struct acer_kb_zone_led *zona =
+        container_of(mc, struct acer_kb_zone_led, mc);
+    acpi_status status;
+    u64 arg;
+
+    /* Escala las tres intensidades por el brillo del LED. */
+    led_mc_calc_color_components(mc, brightness);
+
+    /*
+     * Las zonas hay que activarlas antes de mandar color: sin esto el EC
+     * guarda el valor y no lo usa. Se repite en cada escritura a proposito,
+     * porque cualquier efecto animado las desactiva por el camino.
+     */
+    status = WMI_gaming_execute_u64(ACER_WMID_SET_GAMING_LED_METHODID,
+                                    ACER_GAMING_KBL_SET_ON |
+                                    ACER_GAMING_KBL_SET_ALL_ZONES, NULL);
+    if (ACPI_FAILURE(status))
+        return -EIO;
+
+    arg = zona->zone_id
+        | ((u64)(mc->subled_info[0].brightness & 0xFF) << 8)
+        | ((u64)(mc->subled_info[1].brightness & 0xFF) << 16)
+        | ((u64)(mc->subled_info[2].brightness & 0xFF) << 24);
+
+    status = WMI_gaming_execute_u64(ACER_WMID_SET_GAMING_RGB_KB_METHODID,
+                                    arg, NULL);
+    if (ACPI_FAILURE(status))
+        return -EIO;
+
+    /* Modo estatico, con el brillo global al maximo: el atenuado real lo
+     * hace ya led_mc_calc_color_components() sobre cada componente. */
+    status = set_kb_status(0, 0, 100, 0, 0, 0, 0, 0);
+    if (ACPI_FAILURE(status))
+        return -EIO;
+
+    current_kb_state.per_zone = 1;
+    return 0;
+}
+
+static int acer_kb_leds_init(struct device *dev)
+{
+    static const u8 mascaras[4] = {0x1, 0x2, 0x4, 0x8};
+    /* De izquierda a derecha, tal como las reparte el firmware. */
+    static const char *const nombres[4] = {
+        "acer-wmi:multicolor:kbd_zoned_backlight-left",
+        "acer-wmi:multicolor:kbd_zoned_backlight-middle-left",
+        "acer-wmi:multicolor:kbd_zoned_backlight-middle-right",
+        "acer-wmi:multicolor:kbd_zoned_backlight-right",
+    };
+    struct per_zone_color actual;
+    u64 colores[4] = {0xFFFFFF, 0xFFFFFF, 0xFFFFFF, 0xFFFFFF};
+    int brillo = 100;
+    int i, err;
+
+    /*
+     * El estado inicial se LEE del teclado, no se inventa.
+     *
+     * Registrar los LEDs con 255,255,255 los dejaba creyendo que todo estaba
+     * en blanco, y a la primera escritura -o al guardar y restaurar desde
+     * blink- se perdian los colores que el usuario tuviera puestos. El
+     * sintoma era claro: recargar el modulo convertia cuatro zonas de colores
+     * distintos en cuatro zonas blancas.
+     */
+    if (ACPI_SUCCESS(get_per_zone_color(&actual)))
+    {
+        colores[0] = actual.zone1;
+        colores[1] = actual.zone2;
+        colores[2] = actual.zone3;
+        colores[3] = actual.zone4;
+        if (actual.brightness >= 0 && actual.brightness <= 100)
+            brillo = actual.brightness;
+    }
+
+    for (i = 0; i < 4; i++)
+    {
+        struct acer_kb_zone_led *z = &acer_kb_zone_leds[i];
+
+        z->zone_id = mascaras[i];
+        z->subled[0].color_index = LED_COLOR_ID_RED;
+        z->subled[1].color_index = LED_COLOR_ID_GREEN;
+        z->subled[2].color_index = LED_COLOR_ID_BLUE;
+        z->subled[0].intensity = (colores[i] >> 16) & 0xFF;
+        z->subled[1].intensity = (colores[i] >> 8) & 0xFF;
+        z->subled[2].intensity = colores[i] & 0xFF;
+
+        z->mc.subled_info = z->subled;
+        z->mc.num_colors = 3;
+        z->mc.led_cdev.name = nombres[i];
+        /* 100 para que coincida con el brillo que usa el resto del driver. */
+        z->mc.led_cdev.max_brightness = 100;
+        z->mc.led_cdev.brightness = brillo;
+        z->mc.led_cdev.brightness_set_blocking = acer_kb_zone_set;
+
+        err = devm_led_classdev_multicolor_register(dev, &z->mc);
+        if (err)
+        {
+            pr_warn("no se pudo registrar el LED %s: %d\n", nombres[i], err);
+            return err;
+        }
+    }
+
+    acer_kb_leds_listos = true;
+    pr_info("cuatro zonas publicadas en /sys/class/leds/ como acer-wmi:multicolor:kbd_zoned_backlight-*\n");
+    return 0;
+}
+
 static struct attribute *four_zoned_kb_attrs[] = {
     &four_zoned_rgb_mode.attr,
     &per_zoned_rgb_mode.attr,
@@ -4675,6 +5064,7 @@ static int acer_platform_probe(struct platform_device *device)
         err = sysfs_create_group(&device->dev.kobj, &four_zoned_kb_attr_group);
         if (err)
             goto error_four_zone;
+
         /*
          * Si no hay estado guardado -primera instalacion, o /etc borrado- la
          * cache se queda a ceros y .mode vale 0, que no corresponde a nada
@@ -4684,6 +5074,17 @@ static int acer_platform_probe(struct platform_device *device)
          */
         if (four_zone_kb_state_load() != 0)
             four_zone_kb_state_update();
+
+        /*
+         * Los LEDs se registran DESPUES de restaurar el estado, no antes.
+         * Al reves leian el EC cuando todavia no tenia los colores puestos y
+         * arrancaban todos a cero, de modo que la primera escritura por la
+         * clase LED apagaba un teclado que estaba encendido.
+         *
+         * Que falle no es motivo para abortar: el sysfs propio ya funciona y
+         * los LEDs estandar son un extra para otros programas.
+         */
+        acer_kb_leds_init(&device->dev);
      }
 
     return 0;
